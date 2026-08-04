@@ -112,6 +112,7 @@ class Trainer:
         callbacks: Sequence[Callback] | None = None,
         device: torch.device | None = None,
         batch_adapter: BatchAdapter | None = None,
+        val_batch_adapter: BatchAdapter | None = None,
         dist_ctx: DistContext | None = None,
     ) -> None:
         self.task = task
@@ -120,6 +121,7 @@ class Trainer:
         self.dist = dist_ctx or single_process_context(device)
         self.device = device or self.dist.device
         self.adapter = batch_adapter or TensorBatchAdapter()
+        self.val_adapter = val_batch_adapter or self.adapter
         self.should_stop = False
         self.global_step = 0
         self.start_epoch = 0
@@ -145,6 +147,7 @@ class Trainer:
         self.scheduler: torch.optim.lr_scheduler.LambdaLR | None = None
         self.scaler: torch.amp.GradScaler | None = None
         self._val_loader: DataLoader | None = None
+        self._train_loader: DataLoader | None = None
         self._last_eval_metrics: dict[str, float] = {}
 
     def _trainable_params(self) -> list[torch.nn.Parameter]:
@@ -174,6 +177,7 @@ class Trainer:
         *,
         resume_from: str | Path | None = None,
     ) -> dict[str, float]:
+        self._train_loader = train_loader
         self._val_loader = val_loader
         self.optimizer = torch.optim.AdamW(
             self._trainable_params(), lr=self.config.lr, weight_decay=self.config.weight_decay
@@ -278,13 +282,16 @@ class Trainer:
     @torch.no_grad()
     def _validate(self, loader: DataLoader) -> dict[str, float]:
         self.model.eval()
+        reset = getattr(self.val_adapter, "reset", None)
+        if callable(reset):
+            reset()
         losses: list[float] = []
         preds: list[np.ndarray] = []
         labels_all: list[np.ndarray] = []
         for batch in loader:
-            batch = self.adapter.to_device(batch, self.device)
-            labels = self.adapter.labels(batch)
-            logits = self.adapter.forward(self.model, batch)
+            batch = self.val_adapter.to_device(batch, self.device)
+            labels = self.val_adapter.labels(batch)
+            logits = self.val_adapter.forward(self.model, batch)
             losses.append(self.task.loss(logits, labels).item())
             # Ravel to 1-D so batches of differing sequence length (MLM) still
             # concatenate; regression/classification predictions are already 1-D.
@@ -302,7 +309,7 @@ class Trainer:
     def state_dict(self) -> dict[str, object]:
         """The full training state needed to resume: weights, optimizer, schedule,
         scaler, step counter, and RNG."""
-        return {
+        payload: dict[str, object] = {
             "model_state": self._base_model.state_dict(),
             "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
             "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
@@ -310,6 +317,14 @@ class Trainer:
             "global_step": self.global_step,
             "rng": rng_state(),
         }
+        adapter_state = getattr(self.adapter, "state_dict", None)
+        if callable(adapter_state):
+            payload["batch_adapter_state"] = adapter_state()
+        if self._train_loader is not None:
+            dataset_state = getattr(self._train_loader.dataset, "state_dict", None)
+            if callable(dataset_state):
+                payload["train_dataset_state"] = dataset_state()
+        return payload
 
     def save_checkpoint(self, path: str | Path, *, epoch: int, metrics: dict[str, float]) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +348,23 @@ class Trainer:
         if self.scaler is not None and ckpt.get("scaler_state"):
             self.scaler.load_state_dict(ckpt["scaler_state"])
         self.global_step = int(ckpt.get("global_step", 0))
-        self.start_epoch = int(ckpt.get("epoch", -1)) + 1
+        dataset_payload = ckpt.get("train_dataset_state")
+        if dataset_payload is not None:
+            if self._train_loader is None:
+                raise ValueError("cannot restore dataset cursor before the train loader is attached")
+            load_dataset = getattr(self._train_loader.dataset, "load_state_dict", None)
+            if not callable(load_dataset):
+                raise ValueError("checkpoint contains a data cursor but the dataset is not checkpointable")
+            load_dataset(dataset_payload)
+            # Stateful datasets resume their own cursor inside the current epoch.
+            self.start_epoch = int(ckpt.get("epoch", 0))
+        else:
+            self.start_epoch = int(ckpt.get("epoch", -1)) + 1
+        adapter_payload = ckpt.get("batch_adapter_state")
+        if adapter_payload is not None:
+            load_adapter = getattr(self.adapter, "load_state_dict", None)
+            if not callable(load_adapter):
+                raise ValueError("checkpoint contains adapter state but the adapter cannot restore it")
+            load_adapter(adapter_payload)
         if ckpt.get("rng"):
             set_rng_state(ckpt["rng"])

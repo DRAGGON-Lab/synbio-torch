@@ -47,6 +47,10 @@ All three produce batches consumed by one training engine through a
   which completes a design from a prefix (greedy with `--temperature 0`, or sampled
   with `--temperature`/`--top-k`/`--top-p`). The same is available in Python as
   `st.generate_sequence(model, tokenizer, prompt, max_new_tokens=...)`.
+- **TITANS MAC causal** (`model.kind: titans_mac`) carries an explicit neural
+  fast-memory state across ordered 32-token segments. It uses the same causal
+  task and engine, but an identity-preserving stream dataset and stateful batch
+  adapter; see [titans.md](titans.md).
 
 ## Pretrain, then fine-tune
 
@@ -67,6 +71,7 @@ MLM supports two modes via `model.from_scratch`:
 |-----------|-------------|
 | `hf` | Any pretrained HuggingFace `AutoTokenizer` (DNABERT-2, Nucleotide Transformer, …), wrapped behind the library's tokenizer protocol. |
 | `kmer` | Overlapping k-mers over `{A,C,G,T}`; ambiguous bases map to `<unk>`. |
+| `nonoverlap_kmer` | Lossless non-overlapping canonical k-mers with single-base fallback; Stage C uses `k: 6` (4,103 ids). |
 | `char` | Character-level over a nucleotide (IUPAC) or protein alphabet (`tokenizer.alphabet`). |
 
 All expose the same protocol (`vocab_size`, `pad_token_id`, `mask_token_id`,
@@ -108,3 +113,6 @@ prediction and a model trained on a motif regenerates it (`test_causal.py`); a
 RoPE decoder learns and runs past an absolute model's context limit
 (`test_long_context.py`); and 2-rank DDP matches single-process training
 bit-for-bit (`test_distributed.py`).
+TITANS tests additionally prove causal isolation, the exact fast-weight update,
+higher-order gradients, stream isolation, and state-plus-cursor resume parity
+(`test_titans.py`).

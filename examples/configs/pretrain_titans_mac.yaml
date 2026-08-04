@@ -1,0 +1,54 @@
+seed: 42
+output_dir: runs/pretrain_titans_mac
+
+corpus:
+  source: fasta
+  path: data/genomes.fasta
+  alphabet: dna
+
+tokenizer:
+  kind: nonoverlap_kmer
+  k: 6
+
+encoder:
+  kind: sequence
+
+model:
+  kind: titans_mac
+  hidden_size: 128
+  titans:
+    num_layers: 4
+    num_attention_heads: 4
+    persistent_tokens: 4
+    segment_length: 32
+    memory_expansion_factor: 4
+    projection_kernel_size: 4
+    alpha_initial: 0.001
+    eta_initial: 0.9
+    theta_initial: 0.001
+    tie_embeddings: true
+
+task:
+  kind: causal
+
+stream:
+  enabled: true
+  gradient_horizon: 3
+  memory_mode: adaptive
+  shuffle_streams: true
+
+splits:
+  strategy: hash
+  ratios: [0.8, 0.1, 0.1]
+
+train:
+  batch_size: 2
+  max_steps: 10000
+  eval_every_n_steps: 500
+  checkpoint_every_n_steps: 500
+  lr: 0.00003
+  weight_decay: 0.1
+  max_grad_norm: 0.5
+  amp: false
+  precision: fp32
+  num_workers: 0

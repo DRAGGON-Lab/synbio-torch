@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from synbiotorch.tokenize.char import CharTokenizer
-from synbiotorch.tokenize.kmer import KmerTokenizer
+from synbiotorch.tokenize.kmer import KmerTokenizer, NonOverlappingKmerTokenizer
 
 
 def test_kmer_vocab_size():
@@ -55,3 +55,20 @@ def test_char_protein_alphabet():
     assert tok._unk not in enc.input_ids
     # A DNA-only char tokenizer would have a smaller, different vocabulary.
     assert tok.vocab_size != CharTokenizer(alphabet="dna").vocab_size
+
+
+def test_nonoverlap_sixmer_is_lossless_and_stage_c_sized():
+    tok = NonOverlappingKmerTokenizer(k=6)
+    sequence = "ACGTACNNRYTAC"
+    encoded = tok.tokenize_content_with_spans(sequence)
+    assert tok.vocab_size == 4103
+    assert sum(encoded.represented_base_counts) == len(sequence)
+    # Unsupported IUPAC symbols normalize to N, while tails remain represented.
+    assert tok.decode(encoded.input_ids) == "ACGTACNNNNTAC"
+
+
+def test_nonoverlap_sixmer_uses_canonical_chunk_and_single_base_fallback():
+    tok = NonOverlappingKmerTokenizer(k=6)
+    encoded = tok.tokenize_content_with_spans("AAAAAANAAAAA")
+    assert encoded.represented_base_counts == [6, 1, 1, 1, 1, 1, 1]
+    assert encoded.input_ids[0] == 7
