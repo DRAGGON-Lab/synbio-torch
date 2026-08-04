@@ -1,4 +1,4 @@
-"""Stage-5 distributed orchestration (DDP), validated GPU-free on gloo.
+"""Distributed orchestration (DDP), validated GPU-free on gloo.
 
 The discipline: the rank-aware data partition is proven disjoint+covering, and the
 headline — a 2-rank DDP run produces the same weights as single-process training
@@ -37,6 +37,7 @@ from synbiotorch.distributed import (
     broadcast_flag,
     cleanup,
     reduce_mean,
+    reduce_ratios,
     select_device,
     setup_distributed,
     single_process_context,
@@ -121,6 +122,7 @@ def test_single_process_helpers_are_noops():
     ctx = single_process_context(CPU)
     assert not ctx.is_distributed and ctx.is_main
     assert reduce_mean({"a": 2.0}, ctx) == {"a": 2.0}
+    assert reduce_ratios({"a": (6.0, 3.0)}, ctx) == {"a": 2.0}
     assert broadcast_flag(True, ctx) is True
 
 
@@ -153,7 +155,8 @@ def _rank_worker(rank: int, world: int, port: int, out_dir: str) -> None:
     _set_env(rank, world, port)
     ctx = setup_distributed("ddp")
     reduced = reduce_mean({"v": float(rank + 1)}, ctx)["v"]
-    Path(out_dir, f"rank{rank}.txt").write_text(f"{ctx.rank},{ctx.world_size},{reduced}")
+    ratio = reduce_ratios({"r": (float(rank + 1), float(2 * rank + 1))}, ctx)["r"]
+    Path(out_dir, f"rank{rank}.txt").write_text(f"{ctx.rank},{ctx.world_size},{reduced},{ratio}")
     cleanup(ctx)
 
 
@@ -161,12 +164,14 @@ def test_ranks_and_metric_reduction(tmp_path):
     mp.spawn(_rank_worker, args=(2, _free_port(), str(tmp_path)), nprocs=2, join=True)
     results = {}
     for r in range(2):
-        rank, world, val = Path(tmp_path, f"rank{r}.txt").read_text().split(",")
-        results[int(rank)] = (int(world), float(val))
+        rank, world, val, ratio = Path(tmp_path, f"rank{r}.txt").read_text().split(",")
+        results[int(rank)] = (int(world), float(val), float(ratio))
     assert set(results) == {0, 1}
-    assert all(world == 2 for world, _ in results.values())
+    assert all(world == 2 for world, _, _ in results.values())
     # mean of per-rank values 1 and 2 is 1.5, identical on every rank.
-    assert all(abs(val - 1.5) < 1e-6 for _, val in results.values())
+    assert all(abs(val - 1.5) < 1e-6 for _, val, _ in results.values())
+    # Sum numerators (1 + 2) and denominators (1 + 3) before division.
+    assert all(abs(ratio - 0.75) < 1e-6 for _, _, ratio in results.values())
 
 
 def _train_single(batch_size: int, grad_accum: int) -> dict[str, torch.Tensor]:

@@ -1,4 +1,4 @@
-"""Stage-2 streaming data: hash splitting, sharded materialize, worker
+"""Streaming data: hash splitting, sharded materialization, worker
 partitioning, token packing, and an end-to-end streaming-MLM learning check.
 
 The discipline: the streaming path is proven equivalent to the in-memory one

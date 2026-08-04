@@ -17,10 +17,10 @@ in-process by native [sbol-rs](https://github.com/marpaia/sbol-rs) bindings.
 | Axis | Options |
 |------|---------|
 | **Data sources** | labeled **FASTA**, CSV/TSV **tables**, **GenBank**, **SBOL** (2 & 3), the sbol-db REST API, or a **synthetic** generator; loaded in-memory or **streamed** from sharded Parquet for corpora larger than RAM |
-| **Tokenizers** | pretrained HuggingFace (`hf`), overlapping k-mer, or character-level over a nucleotide **or protein** alphabet (encode + decode) |
+| **Tokenizers** | pretrained HuggingFace (`hf`), overlapping or lossless non-overlapping k-mer, or character-level over a nucleotide **or protein** alphabet |
 | **Modalities** | `sequence`, `structure_aware` (feature boundaries), `graph` (PyG composition transformer) |
 | **Objectives** | `supervised` / `frozen` heads, `mlm` and `causal` pretraining (from-scratch or continued) |
-| **Architectures** | from-scratch or pretrained; absolute or **RoPE** positions (`gpt_neox`/`llama`/`modernbert`), SDPA/FlashAttention, configurable context length |
+| **Architectures** | from-scratch or pretrained HuggingFace models; absolute or **RoPE** positions; plus explicit-state **TITANS Memory-as-Context** |
 | **Generation** | autoregressive sampling (temperature / top-k / top-p) and design completion from a causal backbone (`synbiotorch generate`) |
 | **Engine** | raw-PyTorch loop, epoch- or **step-budgeted**; AMP (`fp16`/`bf16`), gradient accumulation/clipping, gradient checkpointing, `torch.compile`; **resumable** checkpoints; early stopping; LR schedule |
 | **Scaling** | token **packing**, multi-GPU **DDP** (data-parallel) via `torchrun` |
@@ -88,6 +88,7 @@ metrics = st.run_training(config)
 | [`finetune_structure_aware.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/finetune_structure_aware.yaml) | Sequence + feature-boundary markers. |
 | [`train_graph.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/train_graph.yaml) | Graph transformer over the composition graph. |
 | [`pretrain_causal_long.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/pretrain_causal_long.yaml) | Long-context causal pretraining: RoPE decoder, SDPA, streamed + packed corpus. |
+| [`pretrain_titans.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/pretrain_titans.yaml) | TITANS MAC causal pretraining over ordered genomic streams. |
 | [`finetune_protein.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/finetune_protein.yaml) | Protein regression from a labeled CSV table with the protein char tokenizer. |
 | [`benchmark_dna_classification.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/benchmark_dna_classification.yaml) | Genomics-ML benchmark shape: a labeled table fed to a pretrained DNA backbone for classification. |
 | [`ingest_genbank.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/ingest_genbank.yaml) | Import GenBank to the Parquet cache via the native binding. |
@@ -120,6 +121,7 @@ checkpoint as a model artifact.
 | [configuration.md](https://github.com/marpaia/synbio-torch/blob/master/docs/configuration.md) | Complete `RunConfig` reference. |
 | [data.md](https://github.com/marpaia/synbio-torch/blob/master/docs/data.md) | Data sources, native parsing, materialization, fixtures. |
 | [backbones.md](https://github.com/marpaia/synbio-torch/blob/master/docs/backbones.md) | Choosing/loading backbones and environment constraints. |
+| [titans.md](https://github.com/marpaia/synbio-torch/blob/master/docs/titans.md) | TITANS MAC architecture, fast-memory state, ordered execution, and validation boundary. |
 | [extending.md](https://github.com/marpaia/synbio-torch/blob/master/docs/extending.md) | Adding a tokenizer, encoder, task, callback, or data source. |
 
 Release history is in [CHANGELOG.md](https://github.com/marpaia/synbio-torch/blob/master/CHANGELOG.md).

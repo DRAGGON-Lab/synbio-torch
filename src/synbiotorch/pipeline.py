@@ -22,6 +22,7 @@ from synbiotorch.datasets.dataset import Collator, EncodedDataset
 from synbiotorch.datasets.mlm_collator import MlmCollator
 from synbiotorch.datasets.packing import PackedDataset
 from synbiotorch.datasets.splits import Split, make_split, split_from_assignments
+from synbiotorch.datasets.stream_windows import OrderedStreamWindowDataset
 from synbiotorch.datasets.streaming import StreamingEncodedDataset
 from synbiotorch.distributed import DistContext, barrier, cleanup, setup_distributed
 from synbiotorch.encoders.base import build_encoder
@@ -33,6 +34,7 @@ from synbiotorch.engine.callbacks import (
     PeriodicCheckpoint,
     WandbLogger,
 )
+from synbiotorch.engine.stateful import StatefulCausalBatchAdapter
 from synbiotorch.engine.trainer import Trainer
 from synbiotorch.exceptions import ConfigError
 from synbiotorch.models import build_model
@@ -40,7 +42,7 @@ from synbiotorch.models.causal import CausalLMModel
 from synbiotorch.models.mlm import MaskedLMModel
 from synbiotorch.reproducibility import set_seed
 from synbiotorch.tasks.base import Task, build_task
-from synbiotorch.tokenize.base import build_tokenizer
+from synbiotorch.tokenize.base import SpannedTokenizer, build_tokenizer
 from synbiotorch.types import Design
 
 
@@ -121,7 +123,43 @@ def _build_sequence_run(config: RunConfig, data: PreparedData, task: Task, ctx: 
     collator = _collator_for(config, tokenizer, task)
     train_loader = _loader(data.objects, data.split.train, encoder, collator, config, ctx, shuffle=True)
     val_loader = _loader(data.objects, data.split.val, encoder, collator, config, ctx, shuffle=False)
-    return model, train_loader, val_loader, None
+    return model, train_loader, val_loader, None, None
+
+
+def _build_titans_run(config: RunConfig, data: PreparedData) -> tuple:
+    """Build ordered gradient-horizon windows and independent train/val state."""
+
+    tokenizer = build_tokenizer(config.tokenizer)
+    if not isinstance(tokenizer, SpannedTokenizer):
+        raise ConfigError("TITANS requires a tokenizer that preserves represented base spans")
+    model = build_model(
+        config.model,
+        config.task,
+        vocab_size=tokenizer.vocab_size,
+        pad_token_id=tokenizer.pad_token_id,
+    )
+
+    def loader(indices: tuple[int, ...], *, shuffle: bool) -> DataLoader:
+        dataset = OrderedStreamWindowDataset(
+            [data.objects[index] for index in indices],
+            tokenizer,
+            batch_size=config.train.batch_size,
+            segment_length=config.model.titans.segment_length,
+            gradient_horizon=config.stream.gradient_horizon,
+            seed=config.seed,
+            shuffle_streams=shuffle,
+        )
+        return DataLoader(dataset, batch_size=None, num_workers=0)
+
+    train_adapter = StatefulCausalBatchAdapter(memory_mode=config.stream.memory_mode)
+    val_adapter = StatefulCausalBatchAdapter(memory_mode=config.stream.memory_mode)
+    return (
+        model,
+        loader(data.split.train, shuffle=config.stream.shuffle_streams),
+        loader(data.split.val, shuffle=False),
+        train_adapter,
+        val_adapter,
+    )
 
 
 def _build_streaming_run(config: RunConfig, materialized: MaterializedCorpus, task: Task) -> tuple:
@@ -167,7 +205,7 @@ def _build_streaming_run(config: RunConfig, materialized: MaterializedCorpus, ta
             collate_fn=collator,
         )
 
-    return model, loader(train_ds), loader(val_ds), None
+    return model, loader(train_ds), loader(val_ds), None, None
 
 
 def _build_graph_run(config: RunConfig, data: PreparedData) -> tuple:
@@ -191,7 +229,13 @@ def _build_graph_run(config: RunConfig, data: PreparedData) -> tuple:
             num_workers=config.train.num_workers,
         )
 
-    return model, loader(data.split.train, shuffle=True), loader(data.split.val, shuffle=False), GraphBatchAdapter()
+    return (
+        model,
+        loader(data.split.train, shuffle=True),
+        loader(data.split.val, shuffle=False),
+        GraphBatchAdapter(),
+        None,
+    )
 
 
 def run_training(config: RunConfig, *, resume_from: str | Path | None = None) -> dict[str, float]:
@@ -221,25 +265,29 @@ def _run(config: RunConfig, ctx: DistContext, resume_from: str | Path | None) ->
             materialize(build_corpus(config.corpus), config.corpus.cache_dir, shard_size=config.corpus.shard_size)
         barrier(ctx)
 
-    if config.encoder.kind == "graph":
+    if config.model.kind == "titans":
+        data = prepare_data(config)
+        model, train_loader, val_loader, adapter, val_adapter = _build_titans_run(config, data)
+        corpus_ref, split_ref = data.corpus, data.split
+    elif config.encoder.kind == "graph":
         if streaming:
             raise ConfigError("streaming/packing is not supported for the graph modality")
         if ctx.is_distributed:
             raise ConfigError("distributed training is not supported for the graph modality")
         data = prepare_data(config)
-        model, train_loader, val_loader, adapter = _build_graph_run(config, data)
+        model, train_loader, val_loader, adapter, val_adapter = _build_graph_run(config, data)
         corpus_ref, split_ref = data.corpus, data.split
     elif streaming:
         if config.splits.strategy != "hash":
             raise ConfigError("streaming requires splits.strategy: hash")
         corpus = build_corpus(config.corpus)
         materialized = materialize(corpus, config.corpus.cache_dir, shard_size=config.corpus.shard_size)
-        model, train_loader, val_loader, adapter = _build_streaming_run(config, materialized, task)
+        model, train_loader, val_loader, adapter, val_adapter = _build_streaming_run(config, materialized, task)
         # Streaming computes the split lazily, so partition sizes are not known up front.
         corpus_ref, split_ref = materialized, Split((), (), ())
     else:
         data = prepare_data(config)
-        model, train_loader, val_loader, adapter = _build_sequence_run(config, data, task, ctx)
+        model, train_loader, val_loader, adapter, val_adapter = _build_sequence_run(config, data, task, ctx)
         corpus_ref, split_ref = data.corpus, data.split
 
     metric_name, mode = task.primary_metric
@@ -258,7 +306,15 @@ def _run(config: RunConfig, ctx: DistContext, resume_from: str | Path | None) ->
     if config.wandb.enabled:
         callbacks.append(WandbLogger(config, corpus_ref, split_ref, output_dir, is_main=ctx.is_main))
 
-    trainer = Trainer(model, task, config.train, callbacks=callbacks, batch_adapter=adapter, dist_ctx=ctx)
+    trainer = Trainer(
+        model,
+        task,
+        config.train,
+        callbacks=callbacks,
+        batch_adapter=adapter,
+        val_batch_adapter=val_adapter,
+        dist_ctx=ctx,
+    )
     metrics = trainer.fit(train_loader, val_loader, resume_from=resume_from)
 
     if ctx.is_main:

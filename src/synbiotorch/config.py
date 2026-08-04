@@ -68,7 +68,7 @@ class CorpusConfig(BaseModel):
 
 
 class TokenizerConfig(BaseModel):
-    kind: Literal["hf", "kmer", "char"] = "hf"
+    kind: Literal["hf", "kmer", "nonoverlap_kmer", "char"] = "hf"
     k: int = 6
     stride: int = 1
     max_length: int = 512
@@ -107,7 +107,41 @@ class ArchConfig(BaseModel):
     rope_theta: float | None = None
 
 
+class TitansConfig(BaseModel):
+    """Paper-deep TITANS Memory-as-Context architecture."""
+
+    num_layers: int = 4
+    num_attention_heads: int = 4
+    persistent_tokens: int = 4
+    segment_length: int = 32
+    memory_expansion_factor: int = 4
+    projection_kernel_size: int = 4
+    alpha_initial: float = 0.001
+    eta_initial: float = 0.9
+    theta_initial: float = 0.001
+    tie_embeddings: bool = True
+
+    @model_validator(mode="after")
+    def _check_titans(self) -> "TitansConfig":
+        if self.num_layers <= 0 or self.num_attention_heads <= 0 or self.persistent_tokens <= 0:
+            raise ConfigError("TITANS layers, heads, and persistent tokens must be positive")
+        if self.segment_length != 32:
+            raise ConfigError("the paper-deep TITANS MAC implementation requires segment_length: 32")
+        if self.memory_expansion_factor <= 0:
+            raise ConfigError("TITANS memory expansion must be positive")
+        if self.projection_kernel_size < 2:
+            raise ConfigError("TITANS projection kernel must be at least two")
+        if not 0.0 < self.alpha_initial < 1.0:
+            raise ConfigError("TITANS alpha_initial must be in (0, 1)")
+        if not 0.0 < self.eta_initial < 1.0:
+            raise ConfigError("TITANS eta_initial must be in (0, 1)")
+        if not 0.0 < self.theta_initial < 1.0:
+            raise ConfigError("TITANS theta_initial must be in (0, 1)")
+        return self
+
+
 class ModelConfig(BaseModel):
+    kind: Literal["transformers", "titans"] = "transformers"
     # A HuggingFace hub id, or a local path to a checkpoint saved by a prior run
     # (e.g. the backbone written out by an MLM pretraining run).
     backbone: str = "zhihan1996/DNABERT-2-117M"
@@ -117,6 +151,13 @@ class ModelConfig(BaseModel):
     # downloading pretrained weights — the from-scratch MLM pretraining path.
     from_scratch: bool = False
     arch: ArchConfig = Field(default_factory=ArchConfig)
+    titans: TitansConfig = Field(default_factory=TitansConfig)
+
+    @model_validator(mode="after")
+    def _check_model(self) -> "ModelConfig":
+        if self.kind == "titans" and self.hidden_size % self.titans.num_attention_heads:
+            raise ConfigError("model.hidden_size must be divisible by TITANS attention heads")
+        return self
 
 
 class TaskConfig(BaseModel):
@@ -206,6 +247,21 @@ class PackingConfig(BaseModel):
     block_size: int = 512
 
 
+class StreamConfig(BaseModel):
+    """Ordered stateful sequence execution for recurrent or fast-weight models."""
+
+    enabled: bool = False
+    gradient_horizon: int = 3
+    memory_mode: Literal["adaptive", "frozen", "none"] = "adaptive"
+    shuffle_streams: bool = True
+
+    @model_validator(mode="after")
+    def _check_stream(self) -> "StreamConfig":
+        if self.gradient_horizon <= 0:
+            raise ConfigError("stream.gradient_horizon must be positive")
+        return self
+
+
 class TrainConfig(BaseModel):
     batch_size: int = 16
     epochs: int = 10
@@ -244,9 +300,36 @@ class RunConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     task: TaskConfig = Field(default_factory=TaskConfig)
     packing: PackingConfig = Field(default_factory=PackingConfig)
+    stream: StreamConfig = Field(default_factory=StreamConfig)
     splits: SplitConfig = Field(default_factory=SplitConfig)
     train: TrainConfig = Field(default_factory=TrainConfig)
     wandb: WandbConfig = Field(default_factory=WandbConfig)
+
+    @model_validator(mode="after")
+    def _check_cross_layer_contracts(self) -> "RunConfig":
+        if self.model.kind != "titans":
+            if self.stream.enabled:
+                raise ConfigError("stream.enabled currently requires model.kind: titans")
+            return self
+        if self.task.kind != "causal":
+            raise ConfigError("model.kind: titans requires task.kind: causal")
+        if self.tokenizer.kind != "nonoverlap_kmer":
+            raise ConfigError("model.kind: titans currently requires tokenizer.kind: nonoverlap_kmer")
+        if not self.stream.enabled:
+            raise ConfigError("model.kind: titans requires stream.enabled: true")
+        if self.streaming or self.packing.enabled:
+            raise ConfigError("TITANS ordered streams do not use generic streaming or token packing")
+        if self.train.max_steps is None:
+            raise ConfigError("TITANS ordered-stream training requires train.max_steps")
+        if self.train.num_workers != 0:
+            raise ConfigError("TITANS stateful cursor checkpointing currently requires train.num_workers: 0")
+        if self.train.distributed.strategy != "none":
+            raise ConfigError("distributed TITANS stateful forward and per-rank checkpointing are not implemented")
+        if self.train.amp or self.train.precision != "fp32":
+            raise ConfigError("adaptive TITANS AMP is not yet qualified; use train.amp: false and precision: fp32")
+        if self.train.compile or self.train.gradient_checkpointing:
+            raise ConfigError("adaptive TITANS compile and gradient checkpointing are not yet supported")
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":

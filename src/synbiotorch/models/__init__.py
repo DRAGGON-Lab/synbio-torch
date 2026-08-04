@@ -10,12 +10,14 @@ from synbiotorch.models.causal import CausalLMModel, build_causal_model
 from synbiotorch.models.heads import ClassificationHead, RegressionHead
 from synbiotorch.models.mlm import MaskedLMModel, build_mlm_model
 from synbiotorch.models.sequence_model import SequenceModel
+from synbiotorch.models.titans import TitansCausalLM
 
 __all__ = [
     "build_model",
     "SequenceModel",
     "MaskedLMModel",
     "CausalLMModel",
+    "TitansCausalLM",
     "RegressionHead",
     "ClassificationHead",
     "load_backbone",
@@ -37,6 +39,18 @@ def build_model(
     - ``frozen`` → a SequenceModel with a frozen backbone and a trainable head.
     - ``supervised`` → a SequenceModel fine-tuned end to end.
     """
+    if model_config.kind == "titans":
+        if task_config.kind != "causal":
+            raise ValueError("TITANS MAC is available only for the causal task")
+        if vocab_size is None or pad_token_id is None:
+            raise ValueError("vocab_size and pad_token_id are required for TITANS MAC")
+        return TitansCausalLM(
+            model_config.titans,
+            vocab_size=vocab_size,
+            pad_token_id=pad_token_id,
+            d_model=model_config.hidden_size,
+        )
+
     if task_config.kind == "mlm":
         if vocab_size is None or pad_token_id is None:
             raise ValueError("vocab_size and pad_token_id are required to build an MLM model")

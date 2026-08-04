@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+
 from synbiotorch.sources.fasta import FastaCorpus
 from synbiotorch.sources.sbol import SbolFileCorpus
 
@@ -32,3 +34,18 @@ def test_fingerprint_is_stable(fasta_file):
     a = FastaCorpus(fasta_file).fingerprint()
     b = FastaCorpus(fasta_file).fingerprint()
     assert a == b
+
+
+def test_compressed_fasta_split_directories_preserve_stream_boundaries(tmp_path):
+    for split, accession in (("train", "GCF_000005845.2"), ("val", "GCA_000249155.2")):
+        directory = tmp_path / split
+        directory.mkdir()
+        path = directory / f"{accession}_genomic.fna.gz"
+        with gzip.open(path, "wt") as handle:
+            handle.write(f">{accession}_chromosome complete genome\nACGTACGT\n")
+    objects = list(FastaCorpus(tmp_path))
+    assert [obj.raw["split"] for obj in objects] == ["train", "val"]
+    assert [obj.raw["source_file"] for obj in objects] == [
+        str(tmp_path / "train" / "GCF_000005845.2_genomic.fna.gz"),
+        str(tmp_path / "val" / "GCA_000249155.2_genomic.fna.gz"),
+    ]

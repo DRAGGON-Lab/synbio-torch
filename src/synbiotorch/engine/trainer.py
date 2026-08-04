@@ -18,7 +18,7 @@ from __future__ import annotations
 import itertools
 from contextlib import nullcontext
 from pathlib import Path
-from typing import ContextManager, Iterable, Sequence
+from typing import Any, ContextManager, Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -26,7 +26,13 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from synbiotorch.config import TrainConfig
-from synbiotorch.distributed import DistContext, broadcast_flag, reduce_mean, single_process_context
+from synbiotorch.distributed import (
+    DistContext,
+    broadcast_flag,
+    reduce_mean,
+    reduce_ratios,
+    single_process_context,
+)
 from synbiotorch.engine.batch import BatchAdapter, TensorBatchAdapter
 from synbiotorch.exceptions import ConfigError
 from synbiotorch.reproducibility import rng_state, set_rng_state
@@ -112,6 +118,7 @@ class Trainer:
         callbacks: Sequence[Callback] | None = None,
         device: torch.device | None = None,
         batch_adapter: BatchAdapter | None = None,
+        val_batch_adapter: BatchAdapter | None = None,
         dist_ctx: DistContext | None = None,
     ) -> None:
         self.task = task
@@ -120,6 +127,7 @@ class Trainer:
         self.dist = dist_ctx or single_process_context(device)
         self.device = device or self.dist.device
         self.adapter = batch_adapter or TensorBatchAdapter()
+        self.val_adapter = val_batch_adapter or self.adapter
         self.should_stop = False
         self.global_step = 0
         self.start_epoch = 0
@@ -145,7 +153,31 @@ class Trainer:
         self.scheduler: torch.optim.lr_scheduler.LambdaLR | None = None
         self.scaler: torch.amp.GradScaler | None = None
         self._val_loader: DataLoader | None = None
+        self._train_loader: DataLoader | None = None
         self._last_eval_metrics: dict[str, float] = {}
+        self._last_train_metrics: dict[str, float] = {}
+
+    @staticmethod
+    def _batch_metric_contributions(
+        adapter: BatchAdapter,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        batch: Any,
+    ) -> Mapping[str, tuple[torch.Tensor, torch.Tensor]]:
+        collect = getattr(adapter, "metric_contributions", None)
+        return collect(logits, labels, batch) if callable(collect) else {}
+
+    @staticmethod
+    def _add_contributions(
+        totals: dict[str, tuple[float, float]],
+        contributions: Mapping[str, tuple[torch.Tensor, torch.Tensor]],
+    ) -> None:
+        for name, (numerator, denominator) in contributions.items():
+            previous_numerator, previous_denominator = totals.get(name, (0.0, 0.0))
+            totals[name] = (
+                previous_numerator + float(numerator.detach().cpu().double()),
+                previous_denominator + float(denominator.detach().cpu().double()),
+            )
 
     def _trainable_params(self) -> list[torch.nn.Parameter]:
         return [p for p in self._base_model.parameters() if p.requires_grad]
@@ -174,6 +206,7 @@ class Trainer:
         *,
         resume_from: str | Path | None = None,
     ) -> dict[str, float]:
+        self._train_loader = train_loader
         self._val_loader = val_loader
         self.optimizer = torch.optim.AdamW(
             self._trainable_params(), lr=self.config.lr, weight_decay=self.config.weight_decay
@@ -200,9 +233,9 @@ class Trainer:
                 self.current_epoch = epoch
                 train_loss = self._train_epoch(train_loader, epoch)
                 if step_based_eval:
-                    last_metrics = self._last_eval_metrics or last_metrics
+                    last_metrics = {**self._last_train_metrics, **self._last_eval_metrics} or last_metrics
                 else:
-                    metrics = {"train_loss": train_loss}
+                    metrics = self._last_train_metrics or {"train_loss": train_loss}
                     if val_loader is not None:
                         metrics.update(self._validate(val_loader))
                     last_metrics = metrics
@@ -224,6 +257,8 @@ class Trainer:
         self.optimizer.zero_grad()
         total = 0.0
         count = 0
+        metric_totals: dict[str, tuple[float, float]] = {}
+        step_metric_totals: dict[str, tuple[float, float]] = {}
         eval_every = self.config.eval_every_n_steps
         for step, batch in enumerate(loader):
             batch = self.adapter.to_device(batch, self.device)
@@ -235,6 +270,9 @@ class Trainer:
             ):
                 logits = self.adapter.forward(self.model, batch)
                 loss = self.task.loss(logits, labels) / self.config.grad_accum
+            contributions = self._batch_metric_contributions(self.adapter, logits, labels, batch)
+            self._add_contributions(metric_totals, contributions)
+            self._add_contributions(step_metric_totals, contributions)
             is_update_step = (step + 1) % self.config.grad_accum == 0
             # Under DDP, skip the gradient all-reduce on accumulation micro-steps;
             # sync only on the step that actually applies the update.
@@ -252,6 +290,9 @@ class Trainer:
                     "step_loss": float(loss.item() * self.config.grad_accum),
                     "lr": float(self.scheduler.get_last_lr()[0]),
                 }
+                for name, (numerator, denominator) in step_metric_totals.items():
+                    logs[f"step_{name}"] = numerator / max(1.0, denominator)
+                step_metric_totals = {}
                 for cb in self.callbacks:
                     cb.on_step_end(self, self.global_step, logs)
                 if eval_every and self.global_step % eval_every == 0 and self._val_loader is not None:
@@ -264,7 +305,13 @@ class Trainer:
             count += 1
             if self.should_stop:
                 break
-        return total / max(1, count)
+        mean_loss = total / max(1, count)
+        ratios = reduce_ratios(metric_totals, self.dist)
+        self._last_train_metrics = {
+            "train_loss": ratios.pop("loss", mean_loss),
+            **{f"train_{name}": value for name, value in ratios.items()},
+        }
+        return self._last_train_metrics["train_loss"]
 
     def _grad_sync_context(self, is_update_step: bool) -> ContextManager:
         if not is_update_step and isinstance(self.model, DistributedDataParallel):
@@ -278,31 +325,43 @@ class Trainer:
     @torch.no_grad()
     def _validate(self, loader: DataLoader) -> dict[str, float]:
         self.model.eval()
+        reset = getattr(self.val_adapter, "reset", None)
+        if callable(reset):
+            reset()
         losses: list[float] = []
         preds: list[np.ndarray] = []
         labels_all: list[np.ndarray] = []
+        metric_totals: dict[str, tuple[float, float]] = {}
         for batch in loader:
-            batch = self.adapter.to_device(batch, self.device)
-            labels = self.adapter.labels(batch)
-            logits = self.adapter.forward(self.model, batch)
+            batch = self.val_adapter.to_device(batch, self.device)
+            labels = self.val_adapter.labels(batch)
+            logits = self.val_adapter.forward(self.model, batch)
             losses.append(self.task.loss(logits, labels).item())
+            self._add_contributions(
+                metric_totals,
+                self._batch_metric_contributions(self.val_adapter, logits, labels, batch),
+            )
             # Ravel to 1-D so batches of differing sequence length (MLM) still
             # concatenate; regression/classification predictions are already 1-D.
             preds.append(self.task.predict(logits).detach().cpu().numpy().ravel())
             labels_all.append(labels.detach().cpu().numpy().ravel())
-        metrics = {"val_loss": float(np.mean(losses)) if losses else 0.0}
+        metrics = {"loss": float(np.mean(losses)) if losses else 0.0}
         if preds:
             metrics.update(self.task.epoch_metrics(np.concatenate(preds), np.concatenate(labels_all)))
+        # Ordinary task metrics are rank means. Additive metrics instead sum
+        # their global numerators and denominators before division.
+        metrics = reduce_mean(metrics, self.dist)
+        metrics.update(reduce_ratios(metric_totals, self.dist))
         named = {f"val_{k}" if not k.startswith("val_") else k: v for k, v in metrics.items()}
         # Average across ranks so every rank sees identical metrics — this keeps
         # metric-driven decisions (early stop, best-checkpoint) consistent without
         # extra coordination. Each rank validates its own data shard.
-        return reduce_mean(named, self.dist)
+        return named
 
     def state_dict(self) -> dict[str, object]:
         """The full training state needed to resume: weights, optimizer, schedule,
         scaler, step counter, and RNG."""
-        return {
+        payload: dict[str, object] = {
             "model_state": self._base_model.state_dict(),
             "optimizer_state": self.optimizer.state_dict() if self.optimizer is not None else None,
             "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
@@ -310,6 +369,14 @@ class Trainer:
             "global_step": self.global_step,
             "rng": rng_state(),
         }
+        adapter_state = getattr(self.adapter, "state_dict", None)
+        if callable(adapter_state):
+            payload["batch_adapter_state"] = adapter_state()
+        if self._train_loader is not None:
+            dataset_state = getattr(self._train_loader.dataset, "state_dict", None)
+            if callable(dataset_state):
+                payload["train_dataset_state"] = dataset_state()
+        return payload
 
     def save_checkpoint(self, path: str | Path, *, epoch: int, metrics: dict[str, float]) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +400,23 @@ class Trainer:
         if self.scaler is not None and ckpt.get("scaler_state"):
             self.scaler.load_state_dict(ckpt["scaler_state"])
         self.global_step = int(ckpt.get("global_step", 0))
-        self.start_epoch = int(ckpt.get("epoch", -1)) + 1
+        dataset_payload = ckpt.get("train_dataset_state")
+        if dataset_payload is not None:
+            if self._train_loader is None:
+                raise ValueError("cannot restore dataset cursor before the train loader is attached")
+            load_dataset = getattr(self._train_loader.dataset, "load_state_dict", None)
+            if not callable(load_dataset):
+                raise ValueError("checkpoint contains a data cursor but the dataset is not checkpointable")
+            load_dataset(dataset_payload)
+            # Stateful datasets resume their own cursor inside the current epoch.
+            self.start_epoch = int(ckpt.get("epoch", 0))
+        else:
+            self.start_epoch = int(ckpt.get("epoch", -1)) + 1
+        adapter_payload = ckpt.get("batch_adapter_state")
+        if adapter_payload is not None:
+            load_adapter = getattr(self.adapter, "load_state_dict", None)
+            if not callable(load_adapter):
+                raise ValueError("checkpoint contains adapter state but the adapter cannot restore it")
+            load_adapter(adapter_payload)
         if ckpt.get("rng"):
             set_rng_state(ckpt["rng"])

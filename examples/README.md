@@ -19,11 +19,38 @@ Run any config with the CLI:
 synbiotorch train examples/configs/<name>.yaml
 ```
 
+The domain-neutral TITANS systems probe needs no corpus download. It exercises
+the immutable mmap stream store, stateful training, validation, and exact
+represented-unit BPB reporting:
+
+```bash
+uv run python examples/titans_systems_probe.py --tokens-per-stream 4096 --steps 10
+```
+
+The composed experiment is a runnable `RunConfig` plus varied conditions and
+seeds. It resolves directly to six executable runs:
+
+```bash
+uv run synbiotorch experiment show \
+  examples/experiments/titans_methodological_inquiry.yaml
+```
+
+Run all six small synthetic conditions with:
+
+```bash
+uv run synbiotorch experiment run \
+  examples/experiments/titans_methodological_inquiry.yaml
+```
+
+See [`docs/experiments.md`](../docs/experiments.md) for the identity and
+qualification model.
+
 | Config | Task | Data | Prerequisites |
 |--------|------|------|---------------|
 | [`train_graph.yaml`](configs/train_graph.yaml) | Graph transformer regression | synthetic | `WANDB_API_KEY` (or set `wandb.enabled: false`) |
 | [`finetune_structure_aware.yaml`](configs/finetune_structure_aware.yaml) | Structure-aware regression (from scratch) | synthetic | `WANDB_API_KEY` (or set `wandb.enabled: false`) |
 | [`pretrain_mlm.yaml`](configs/pretrain_mlm.yaml) | From-scratch MLM pretraining | sbol-db | a running sbol-db at `base_url` |
+| [`pretrain_titans.yaml`](configs/pretrain_titans.yaml) | TITANS MAC causal pretraining | genomic FASTA | replace `corpus.path` with a long-sequence FASTA |
 | [`finetune_expression.yaml`](configs/finetune_expression.yaml) | Frozen DNABERT-2 → regression | sbol-db | a running sbol-db, plus DNABERT-2 (Linux/GPU — see [backbones](../docs/backbones.md)) |
 | [`finetune_protein.yaml`](configs/finetune_protein.yaml) | Protein regression (from scratch) | [`data/protein_activity.csv`](data/protein_activity.csv) | none — runs offline |
 | [`benchmark_dna_classification.yaml`](configs/benchmark_dna_classification.yaml) | DNA sequence classification | [`data/promoter_strength.csv`](data/promoter_strength.csv) | DNABERT-2 from the hub (network) |

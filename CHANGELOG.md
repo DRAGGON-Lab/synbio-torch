@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- A minimal TITANS Memory-as-Context causal model with
+  explicit functional fast-memory state, paper-exact sequential updates,
+  lossless non-overlapping k-mer tokenization, ordered stream windows,
+  checkpointed stream cursors and states, and segment-aware generation.
+
 ## [0.2.0] - 2026-06-20
 
 A rebrand to a general synthetic-biology ML library. **Breaking** throughout (the

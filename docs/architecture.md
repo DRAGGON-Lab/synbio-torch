@@ -20,12 +20,13 @@ source is anything satisfying the `Corpus` protocol (`__iter__` yielding
 
 ## Swappable plug points
 
-Three independent axes are each a `Protocol` with interchangeable implementations,
-selected by configuration:
+Four independent axes are selected through narrow interfaces and configuration:
 
 - **Tokenizer** — how a sequence becomes tokens (`hf`, `kmer`, `char`).
 - **Encoder** — the input modality, turning an `Design` into model input
   (`sequence`, `structure_aware`, `graph`).
+- **Model** — a conventional stateless backbone or a pure state-in/state-out
+  architecture (`transformers`, `titans`).
 - **Task** — the training objective, owning loss and metrics (`supervised`,
   `frozen`, `mlm`, `causal`).
 
@@ -40,7 +41,8 @@ gradient checkpointing and `torch.compile`, and a list of callbacks
 (`EarlyStopping`, `ModelCheckpoint`, `PeriodicCheckpoint`, `MetricLogger`,
 `WandbLogger`). A run is bounded by epochs or by a step budget (`max_steps`), and
 checkpoints carry full optimizer/scheduler/scaler/RNG state so a run resumes after
-an interruption. The loop learns the batch shape only through a `BatchAdapter`, so
+an interruption. Stateful adapters may also contribute model-external memory to
+the checkpoint. The loop learns the batch shape only through a `BatchAdapter`, so
 it trains a sequence model (tensor-dict batches) or a graph model (PyG `Batch`
 objects), and it wraps the model for data-parallel (DDP) training when configured.
 
@@ -50,23 +52,26 @@ A `RunConfig` drives the whole pipeline. The configured `Corpus` source is
 materialized to sharded Parquet and split into train/val/test. The default path
 loads it into memory and splits by index; the streaming path iterates the shards
 lazily and assigns each record to a partition by a hash split, optionally packing
-tokens into fixed-length blocks. The `Encoder` turns each `Design` into model
-input for its modality, using the `Tokenizer`, and a `DataLoader` batches the
-result through a collator (padding, MLM masking, or causal next-token shift). The
-`Trainer` then runs the loop under the `Task` and `BatchAdapter`, writing
-checkpoints and metrics.
+tokens into fixed-length blocks. A separate ordered-stream path assigns complete
+biological sequences to stable batch slots for stateful models; it checkpoints
+both its cursor and the adapter-owned state. The `Encoder` turns each `Design`
+into model input for its modality, using the `Tokenizer`, and a `DataLoader`
+batches the result through a collator (padding, MLM masking, or causal next-token
+shift). The `Trainer` then runs the loop under the `Task` and `BatchAdapter`,
+writing checkpoints and metrics.
 
 ## Layers
 
 | Layer | Module | Responsibility |
 |-------|--------|----------------|
+| Experiments | `synbiotorch.experiments` | Resolves a `RunConfig` template and varied values into executable runs and matched contrasts. |
 | Config | `synbiotorch.config` | One Pydantic `RunConfig` per run; validated, serialized. |
 | Sources | `synbiotorch.sources` | Corpus sources (FASTA, table, GenBank, SBOL, sbol-db, synthetic), each normalizing to `Design`. |
 | Data | `synbiotorch.data` | The `Corpus` protocol, `build_corpus`, and sharded Parquet materialization. |
-| Tokenize | `synbiotorch.tokenize` | `hf` / `kmer` / `char` behind one protocol (encode + decode). |
+| Tokenize | `synbiotorch.tokenize` | `hf` / overlapping k-mer / lossless non-overlapping k-mer / `char` behind one protocol. |
 | Encoders | `synbiotorch.encoders` | Turn a `Design` into model input, per modality. |
-| Datasets | `synbiotorch.datasets` | Map-style and streaming `Dataset`s, token packing, padding / MLM / causal collators, seeded and hash splits. |
-| Models | `synbiotorch.models` | Backbone (pretrained or from-scratch) + pooling + head; MLM, causal, and graph models. |
+| Datasets | `synbiotorch.datasets` | Map-style, Parquet-streaming, and ordered stateful datasets; token packing, collators, seeded/hash splits. |
+| Models | `synbiotorch.models` | Backbone models plus the explicit-state TITANS MAC causal architecture. |
 | Tasks | `synbiotorch.tasks` | Loss, metrics, label dtype, target transform. |
 | Engine | `synbiotorch.engine` | Training loop, callbacks, batch adapters. |
 | Distributed | `synbiotorch.distributed` | Process-group setup, rank-aware data/IO, metric reduction (DDP). |
@@ -78,6 +83,8 @@ checkpoints and metrics.
 - `Corpus`: `__iter__() -> Iterator[Design]`, `fingerprint() -> str`.
 - `Tokenizer`: `encode`, `tokenize_content`, `vocab_size`, `pad_token_id`,
   `mask_token_id`, `special_token_ids`, `max_length`.
+- `SpannedTokenizer`: lossless content ids plus the number of source bases each
+  token represents.
 - `Encoder`: `encode(Design) -> ModelInput`, `output_spec -> EncoderSpec`.
 - `Task`: `loss`, `predict`, `epoch_metrics`, `primary_metric`, `label_dtype`.
 - `BatchAdapter`: `to_device`, `forward(model, batch)`, `labels(batch)`.
@@ -85,6 +92,9 @@ checkpoints and metrics.
 
 ## Reproducibility
 
+- An experiment and its resolved runs have stable content identities. Every run
+  contains a validated `RunConfig`; non-reference execution values require
+  invariant evidence. See [experiments.md](experiments.md).
 - A run is fully specified by its `RunConfig`; the resolved config is written to
   `<output_dir>/config.resolved.yaml`.
 - `seed` seeds Python, NumPy, and torch. The in-memory split is a pure function of

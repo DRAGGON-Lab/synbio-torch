@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Mapping
 
 import torch
 import torch.distributed as dist
@@ -97,6 +98,28 @@ def reduce_mean(values: dict[str, float], ctx: DistContext) -> dict[str, float]:
     dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     tensor /= ctx.world_size
     return {k: float(tensor[i]) for i, k in enumerate(keys)}
+
+
+def reduce_ratios(contributions: Mapping[str, tuple[float, float]], ctx: DistContext) -> dict[str, float]:
+    """Sum additive numerators/denominators, then form global ratios.
+
+    Averaging per-batch or per-rank ratios is wrong when token/base counts differ.
+    Stateful metrics use this helper so BPB is the total log-loss in bits divided
+    by the total represented units across every participating rank.
+    """
+
+    keys = sorted(contributions)
+    if not keys:
+        return {}
+    if not ctx.is_distributed:
+        return {key: numerator / max(denominator, 1.0) for key, (numerator, denominator) in contributions.items()}
+    totals = torch.tensor(
+        [value for key in keys for value in contributions[key]],
+        dtype=torch.float64,
+        device=ctx.device,
+    ).view(len(keys), 2)
+    dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+    return {key: float(totals[index, 0] / totals[index, 1].clamp_min(1.0)) for index, key in enumerate(keys)}
 
 
 def broadcast_flag(flag: bool, ctx: DistContext) -> bool:

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from synbiotorch.config import RunConfig, TaskConfig
 from synbiotorch.data.corpus import build_corpus
 from synbiotorch.data.materialize import materialize
+from synbiotorch.experiments import Experiment
 from synbiotorch.generate import generate_sequence
 from synbiotorch.models import build_model
 from synbiotorch.pipeline import run_training
@@ -55,6 +57,28 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_show_experiment(args: argparse.Namespace) -> int:
+    experiment = Experiment.from_yaml(args.config)
+    rendered = experiment.resolve().model_dump_json(indent=2)
+    if args.output is None:
+        print(rendered)
+    else:
+        output = Path(args.output)
+        output.write_text(f"{rendered}\n")
+        print(f"resolved experiment -> {output}")
+    return 0
+
+
+def _cmd_run_experiment(args: argparse.Namespace) -> int:
+    experiment = Experiment.from_yaml(args.config)
+    selected = experiment.resolve().select(args.run_id)
+    for index, run in enumerate(selected, start=1):
+        print(f"run {index}/{len(selected)}: {run.run_id} {run.values}")
+        metrics = run.execute()
+        print("final metrics:", metrics)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="synbiotorch", description="Train transformer models on SBOL data")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -81,6 +105,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_generate.add_argument("--num-samples", type=int, default=1)
     p_generate.add_argument("--seed", type=int, default=None)
     p_generate.set_defaults(func=_cmd_generate)
+
+    p_experiment = sub.add_parser("experiment", help="Inspect or run a parameter-sweep experiment")
+    experiment_sub = p_experiment.add_subparsers(dest="experiment_command", required=True)
+    p_show = experiment_sub.add_parser("show", help="Show the resolved runs and matched contrasts")
+    p_show.add_argument("config", help="Path to an experiment YAML")
+    p_show.add_argument("--output", default=None, help="Write resolved JSON to this path instead of stdout")
+    p_show.set_defaults(func=_cmd_show_experiment)
+    p_experiment_run = experiment_sub.add_parser("run", help="Resolve and execute experiment runs")
+    p_experiment_run.add_argument("config", help="Path to an experiment YAML")
+    p_experiment_run.add_argument(
+        "--run-id",
+        action="append",
+        default=[],
+        help="Execute only this resolved run id; repeat to select multiple runs",
+    )
+    p_experiment_run.set_defaults(func=_cmd_run_experiment)
 
     return parser
 

@@ -23,6 +23,7 @@ config = RunConfig.from_yaml("examples/configs/train_graph.yaml")
 | `model` | object | defaults | Backbone + architecture. |
 | `task` | object | defaults | Training objective. |
 | `packing` | object | defaults | Token packing for LM pretraining (off by default). |
+| `stream` | object | defaults | Ordered, identity-preserving execution for stateful models (off by default). Distinct from generic Parquet `streaming`. |
 | `splits` | object | defaults | Train/val/test partitioning. |
 | `train` | object | defaults | Optimization loop. |
 | `wandb` | object | defaults | Weights & Biases tracking (disabled by default). |
@@ -55,7 +56,7 @@ See [data.md](data.md) for the corpus sources in depth.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `kind` | `hf` \| `kmer` \| `char` | `hf` | `hf` wraps any HuggingFace `AutoTokenizer`; `kmer` is overlapping k-mers; `char` is IUPAC character-level. |
+| `kind` | `hf` \| `kmer` \| `nonoverlap_kmer` \| `char` | `hf` | `nonoverlap_kmer` is the lossless fixed-vocabulary tokenizer used by TITANS; canonical chunks use one token and ambiguous/trailing bases fall back individually. |
 | `k` | int | `6` | k-mer size (`kmer` only). |
 | `stride` | int | `1` | k-mer stride (`kmer` only). |
 | `max_length` | int | `512` | Max tokens per sequence. |
@@ -66,6 +67,7 @@ See [data.md](data.md) for the corpus sources in depth.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
+| `kind` | `transformers` \| `titans` | `transformers` | Select the standard HuggingFace/graph family or the state-explicit TITANS MAC causal LM. |
 | `kind` | `sequence` \| `structure_aware` \| `graph` | `sequence` | Input modality. |
 | `roles` | list[str] | `null` | `structure_aware`: role IRIs that get dedicated boundary markers. `null` falls back to a default Sequence Ontology set (promoter/RBS/CDS/terminator). |
 | `mark_orientation` | bool | `true` | `structure_aware`: emit a marker for reverse-complement features. |
@@ -79,6 +81,22 @@ See [data.md](data.md) for the corpus sources in depth.
 | `dropout` | float | `0.1` | Head dropout. |
 | `from_scratch` | bool | `false` | Build an untrained encoder from `arch` + the tokenizer/encoder vocab instead of loading pretrained weights. |
 | `arch` | object | defaults | Architecture for `from_scratch` (and the graph model). |
+| `titans` | object | defaults | TITANS MAC architecture, used only when `kind: titans`. |
+
+### `model.titans`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `num_layers` | int | `4` | Number of MAC blocks. |
+| `num_attention_heads` | int | `4` | Attention heads; must divide `model.hidden_size`. |
+| `persistent_tokens` | int | `4` | Learned persistent tokens in each `[P; H; Z]` attention layout. |
+| `segment_length` | int | `32` | Fixed TITANS MAC segment width; other values are currently rejected. |
+| `memory_expansion_factor` | int | `4` | Hidden expansion of the functional residual-memory MLP. |
+| `projection_kernel_size` | int | `4` | Causal depthwise Q/K/V projection kernel. |
+| `alpha_initial` | float | `0.001` | Initial memory-decay gate. |
+| `eta_initial` | float | `0.9` | Initial surprise-momentum gate. |
+| `theta_initial` | float | `0.001` | Initial surprise-gradient step gate. |
+| `tie_embeddings` | bool | `true` | Tie token embeddings to the causal LM head. |
 
 ### `model.arch`
 
@@ -114,6 +132,18 @@ See [capabilities.md](capabilities.md) for how modality and objective combine.
 | `enabled` | bool | `false` | Concatenate tokenized documents into fixed-length blocks with no padding, so every position carries signal. The training unit becomes a block, not a document. For `task.kind: mlm` or `causal`, used with `streaming`. |
 | `block_size` | int | `512` | Tokens per packed block. Must be ≤ `model.arch.max_position_embeddings`. |
 
+## `stream`
+
+This section is for recurrent/fast-weight model state, while top-level
+`streaming` is only an input-loading strategy. It currently applies to TITANS.
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `enabled` | bool | `false` | Preserve biological stream identity and carry model state between ordered windows. Required by `titans`. |
+| `gradient_horizon` | int | `3` | Number of 32-token segments linked by autograd before state is detached. |
+| `memory_mode` | `adaptive` \| `frozen` \| `none` | `adaptive` | Read/write memory, read-only memory, or zero retrieval/no update. |
+| `shuffle_streams` | bool | `true` | Seeded shuffle of whole stream assignment; never shuffles tokens within a stream. |
+
 ## `splits`
 
 | Field | Type | Default | Notes |
@@ -147,9 +177,9 @@ record — both reproducible across runs.
 | `early_stop` | object | `null` | Omit to disable. |
 
 Checkpoints (`best.pt`, `last.pt`) carry full optimizer/scheduler/scaler/RNG
-state. Resume a run with `synbiotorch train <config> --resume <output_dir>/last.pt`;
-it continues from the next epoch boundary after the checkpointed one, with the
-step counter and LR schedule intact.
+state. TITANS checkpoints additionally carry the ordered-dataset cursor and
+active neural-memory states, so they resume at the next unseen window. Resume a
+run with `synbiotorch train <config> --resume <output_dir>/last.pt`.
 
 ### `train.distributed`
 

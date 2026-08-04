@@ -7,8 +7,9 @@ unless overridden, so protein and RNA FASTA feed the right tokenizers.
 
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, TextIO
 
 from synbiotorch.config import CorpusConfig
 from synbiotorch.types import Alphabet, Design, Sequence
@@ -17,6 +18,17 @@ from .files import fingerprint_files, list_files
 
 SBOL3 = "http://sbols.org/v3#"
 _FASTA_EXTENSIONS = {".fa", ".fasta", ".fna", ".faa"}
+_SPLIT_ALIASES = {
+    "train": "train",
+    "training": "train",
+    "val": "val",
+    "valid": "val",
+    "validation": "val",
+    "dev": "val",
+    "test": "test",
+    "testing": "test",
+    "eval": "test",
+}
 # Characters that, by themselves, identify a sequence as nucleotide (IUPAC).
 _NUCLEOTIDE = set("ACGTUNRYSWKMBDHVacgtunryswkmbdhv")
 
@@ -43,7 +55,7 @@ class FastaCorpus:
         return cls(config.path, label_key=config.label_key, alphabet=config.alphabet)
 
     def _files(self) -> list[Path]:
-        return [p for p in list_files(self.path) if p.suffix.lower() in _FASTA_EXTENSIONS]
+        return [p for p in list_files(self.path) if _is_fasta(p)]
 
     def _alphabet_for(self, elements: str) -> Alphabet:
         if self.alphabet != "auto":
@@ -57,6 +69,7 @@ class FastaCorpus:
     def _parse(self, file: Path) -> Iterator[Design]:
         header: str | None = None
         chunks: list[str] = []
+        split = _split_from_path(self.path, file)
 
         def flush() -> Design | None:
             if header is None:
@@ -70,10 +83,14 @@ class FastaCorpus:
                 display_id=seq_id,
                 sequence=Sequence(elements=elements, alphabet=self._alphabet_for(elements)),
                 label=label,
-                raw={"header": header},
+                raw={
+                    "header": header,
+                    "source_file": str(file),
+                    **({"split": split} if split is not None else {}),
+                },
             )
 
-        with file.open() as handle:
+        with _open_fasta(file) as handle:
             for line in handle:
                 line = line.rstrip("\n")
                 if line.startswith(">"):
@@ -90,6 +107,28 @@ class FastaCorpus:
 
     def fingerprint(self) -> str:
         return fingerprint_files(self._files(), self.label_key, self.alphabet)
+
+
+def _is_fasta(path: Path) -> bool:
+    suffixes = [suffix.lower() for suffix in path.suffixes]
+    if suffixes and suffixes[-1] == ".gz":
+        suffixes.pop()
+    return bool(suffixes and suffixes[-1] in _FASTA_EXTENSIONS)
+
+
+def _open_fasta(path: Path) -> TextIO:
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, mode="rt", encoding="utf-8")
+    return path.open(encoding="utf-8")
+
+
+def _split_from_path(root: Path, file: Path) -> str | None:
+    if not root.is_dir():
+        return None
+    relative = file.relative_to(root)
+    if len(relative.parts) < 2:
+        return None
+    return _SPLIT_ALIASES.get(relative.parts[0].lower())
 
 
 def _label_from_header(header: str, label_key: str) -> float | int | None:

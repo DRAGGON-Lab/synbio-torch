@@ -19,6 +19,20 @@ class Encoded:
     attention_mask: list[int]
 
 
+@dataclass(frozen=True)
+class SpannedTokens:
+    """Content token ids plus the number of source bases represented by each."""
+
+    input_ids: list[int]
+    represented_base_counts: list[int]
+
+    def __post_init__(self) -> None:
+        if len(self.input_ids) != len(self.represented_base_counts):
+            raise ValueError("every token must have one represented-base count")
+        if any(count <= 0 for count in self.represented_base_counts):
+            raise ValueError("content tokens must represent at least one source base")
+
+
 @runtime_checkable
 class Tokenizer(Protocol):
     @property
@@ -49,6 +63,13 @@ class Tokenizer(Protocol):
         ...
 
 
+@runtime_checkable
+class SpannedTokenizer(Tokenizer, Protocol):
+    """Tokenizer that preserves source-base accounting for every content token."""
+
+    def tokenize_content_with_spans(self, sequence: str) -> SpannedTokens: ...
+
+
 def build_tokenizer(config: "object") -> Tokenizer:  # noqa: ANN001 - avoid config import cycle
     """Construct the tokenizer named by ``config.kind``."""
     from ..config import TokenizerConfig
@@ -58,6 +79,10 @@ def build_tokenizer(config: "object") -> Tokenizer:  # noqa: ANN001 - avoid conf
         from .kmer import KmerTokenizer
 
         return KmerTokenizer(k=config.k, stride=config.stride, max_length=config.max_length)
+    if config.kind == "nonoverlap_kmer":
+        from .kmer import NonOverlappingKmerTokenizer
+
+        return NonOverlappingKmerTokenizer(k=config.k, max_length=config.max_length)
     if config.kind == "char":
         from .char import CharTokenizer
 
