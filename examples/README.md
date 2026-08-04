@@ -19,6 +19,14 @@ Run any config with the CLI:
 synbiotorch train examples/configs/<name>.yaml
 ```
 
+The domain-neutral TITANS systems probe needs no corpus download. It exercises
+the immutable mmap stream store, stateful training, validation, and exact
+represented-unit BPB reporting:
+
+```bash
+uv run python examples/titans_systems_probe.py --tokens-per-stream 4096 --steps 10
+```
+
 | Config | Task | Data | Prerequisites |
 |--------|------|------|---------------|
 | [`train_graph.yaml`](configs/train_graph.yaml) | Graph transformer regression | synthetic | `WANDB_API_KEY` (or set `wandb.enabled: false`) |

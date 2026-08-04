@@ -86,7 +86,7 @@ class MACBlock(nn.Module):
         if retrieval.shape != expected or segment.shape != expected:
             raise ValueError(f"retrieval and segment must have shape {expected}")
         persistent = self.persistent_tokens.to(segment)
-        layout = torch.cat((persistent, retrieval, segment), dim=0).unsqueeze(0)
+        layout = torch.cat((persistent, retrieval.to(segment), segment), dim=0).unsqueeze(0)
         packed = F.linear(layout, self.attention.in_proj_weight, self.attention.in_proj_bias)
         query, key, value = packed.chunk(3, dim=-1)
         batch, length, width = query.shape

@@ -322,13 +322,13 @@ class RunConfig(BaseModel):
         if self.train.max_steps is None:
             raise ConfigError("TITANS ordered-stream training requires train.max_steps")
         if self.train.num_workers != 0:
-            raise ConfigError("TITANS ordered-stream training currently requires train.num_workers: 0")
+            raise ConfigError("TITANS stateful cursor checkpointing currently requires train.num_workers: 0")
         if self.train.distributed.strategy != "none":
-            raise ConfigError("distributed TITANS stream ownership is not implemented")
+            raise ConfigError("distributed TITANS stateful forward and per-rank checkpointing are not implemented")
         if self.train.amp or self.train.precision != "fp32":
-            raise ConfigError("the initial exact TITANS implementation requires train.amp: false and precision: fp32")
+            raise ConfigError("adaptive TITANS AMP is not yet qualified; use train.amp: false and precision: fp32")
         if self.train.compile or self.train.gradient_checkpointing:
-            raise ConfigError("torch.compile and gradient checkpointing are not yet supported for TITANS")
+            raise ConfigError("adaptive TITANS compile and gradient checkpointing are not yet supported")
         return self
 
     @classmethod

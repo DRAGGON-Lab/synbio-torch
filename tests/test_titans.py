@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 
 import pytest
@@ -148,6 +149,45 @@ def test_model_outer_gradient_reaches_memory_initialization_and_gate_heads():
     assert model.blocks[0].memory.gates.heads["in_projection"].weight.grad is not None
 
 
+def test_cpu_bfloat16_autocast_keeps_higher_order_memory_state_in_float32():
+    set_seed(31)
+    model = _model()
+    ids = torch.randint(2, model.vocab_size, (1, 32))
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        first = model.forward_segment(ids)
+        second = model.forward_segment(ids, first.states)
+        loss = second.logits.float().square().mean()
+    loss.backward()
+
+    memory_state = second.states[0].blocks[0]
+    state_tensors = [
+        *memory_state.fast_weights.values(),
+        *memory_state.surprise.values(),
+        memory_state.query_history,
+        memory_state.write_history,
+    ]
+    assert all(tensor.dtype == torch.float32 for tensor in state_tensors)
+    assert all(torch.isfinite(tensor).all() for tensor in state_tensors)
+    memory = model.blocks[0].memory
+    for parameter in (memory.memory.in_projection.weight, memory.gates.heads["in_projection"].weight):
+        assert parameter.grad is not None
+        assert parameter.grad.dtype == torch.float32
+        assert torch.isfinite(parameter.grad).all()
+
+
+def test_no_memory_inference_is_a_fullgraph_compile_boundary():
+    set_seed(32)
+    model = _model().eval()
+    ids = torch.randint(2, model.vocab_size, (1, 32))
+
+    def no_memory(input_ids: torch.Tensor) -> torch.Tensor:
+        return model.forward_segment(input_ids, memory_mode="none").logits
+
+    expected = no_memory(ids)
+    compiled = torch.compile(no_memory, backend="eager", fullgraph=True)
+    torch.testing.assert_close(compiled(ids), expected)
+
+
 def test_stream_windows_preserve_cross_segment_labels_and_base_counts():
     tokenizer = NonOverlappingKmerTokenizer(k=1)
     sequence = "ACGT" * 30
@@ -164,6 +204,34 @@ def test_stream_windows_preserve_cross_segment_labels_and_base_counts():
     assert batch["labels"][0, 0, -1] == batch["input_ids"][0, 1, 0]
     assert int(batch["represented_base_counts"].sum()) == 2 * 64
     assert batch["stream_ids"] == ("https://example.org/a", "https://example.org/b")
+
+
+def test_bits_per_base_uses_additive_nll_and_represented_base_counts():
+    adapter = StatefulCausalBatchAdapter()
+    labels = torch.tensor([[[2, 3, -100]]])
+    logits = torch.zeros((1, 1, 3, 4))
+    logits[0, 0, 0, 2] = math.log(3.0)
+    logits[0, 0, 1, 3] = math.log(7.0)
+    batch = {"represented_base_counts": torch.tensor([[[6, 1, 0]]])}
+    contributions = adapter.metric_contributions(logits, labels, batch)
+    nll_sum, token_count = contributions["loss"]
+    bit_sum, base_count = contributions["bits_per_base"]
+    expected = torch.nn.functional.cross_entropy(
+        logits.reshape(-1, 4), labels.reshape(-1), ignore_index=-100, reduction="sum"
+    )
+    torch.testing.assert_close(nll_sum, expected)
+    assert int(token_count) == 2
+    assert int(base_count) == 7
+    torch.testing.assert_close(bit_sum / base_count, expected / (7 * math.log(2.0)))
+
+
+def test_bits_per_base_rejects_unrepresented_active_labels():
+    adapter = StatefulCausalBatchAdapter()
+    labels = torch.tensor([[[2]]])
+    logits = torch.zeros((1, 1, 1, 4))
+    batch = {"represented_base_counts": torch.zeros_like(labels)}
+    with pytest.raises(ValueError, match="positive represented-base count"):
+        adapter.metric_contributions(logits, labels, batch)
 
 
 def test_stateful_adapter_isolates_streams_and_serializes_active_state():
@@ -312,8 +380,18 @@ def test_titans_config_rejects_unsafe_initial_execution_modes():
         "train": {"max_steps": 1, "amp": False, "precision": "fp32"},
     }
     assert RunConfig.model_validate(base).model.kind == "titans_mac"
-    with pytest.raises(ConfigError):
-        RunConfig.model_validate({**base, "train": {"max_steps": 1, "amp": True}})
+    unsafe = [
+        {**base, "streaming": True},
+        {**base, "packing": {"enabled": True}},
+        {**base, "train": {"max_steps": 1, "amp": False, "num_workers": 1}},
+        {**base, "train": {"max_steps": 1, "amp": False, "distributed": {"strategy": "ddp"}}},
+        {**base, "train": {"max_steps": 1, "amp": True}},
+        {**base, "train": {"max_steps": 1, "amp": False, "compile": True}},
+        {**base, "train": {"max_steps": 1, "amp": False, "gradient_checkpointing": True}},
+    ]
+    for candidate in unsafe:
+        with pytest.raises(ConfigError):
+            RunConfig.model_validate(candidate)
 
 
 def test_titans_pipeline_runs_through_existing_trainer(tmp_path):
@@ -344,4 +422,6 @@ def test_titans_pipeline_runs_through_existing_trainer(tmp_path):
     )
     metrics = run_training(config)
     assert "val_loss" in metrics
+    assert metrics["train_bits_per_base"] == pytest.approx(metrics["train_loss"] / math.log(2.0))
+    assert metrics["val_bits_per_base"] == pytest.approx(metrics["val_loss"] / math.log(2.0))
     assert (tmp_path / "run" / "best.pt").exists()

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from typing import Mapping, Sequence, cast
 
 import torch
 from torch import Tensor
+from torch.nn import functional as F
 
+from synbiotorch.datasets.mlm_collator import IGNORE_INDEX
 from synbiotorch.models.titans import TitansCausalLM, TitansState
 
 
@@ -35,6 +38,36 @@ class StatefulCausalBatchAdapter:
         if not isinstance(labels, Tensor):
             raise TypeError("stateful causal labels must be a tensor")
         return labels
+
+    def metric_contributions(
+        self,
+        logits: Tensor,
+        labels: Tensor,
+        batch: dict[str, Tensor | tuple[str, ...]],
+    ) -> dict[str, tuple[Tensor, Tensor]]:
+        """Return additive token-NLL and represented-base BPB components."""
+
+        base_counts = batch.get("represented_base_counts")
+        if not isinstance(base_counts, Tensor):
+            raise TypeError("stateful causal metrics require represented_base_counts")
+        if base_counts.shape != labels.shape:
+            raise ValueError("represented_base_counts must match labels")
+        active = labels.ne(IGNORE_INDEX)
+        if bool(base_counts[active].le(0).any().item()):
+            raise ValueError("every active label must have a positive represented-base count")
+        per_token = F.cross_entropy(
+            logits.float().reshape(-1, logits.size(-1)),
+            labels.reshape(-1),
+            ignore_index=IGNORE_INDEX,
+            reduction="none",
+        ).view_as(labels)
+        nll_sum = (per_token * active).sum()
+        valid_tokens = active.sum()
+        valid_bases = (base_counts * active).sum()
+        return {
+            "loss": (nll_sum, valid_tokens),
+            "bits_per_base": (nll_sum / math.log(2.0), valid_bases),
+        }
 
     def forward(
         self,

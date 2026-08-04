@@ -34,8 +34,8 @@ The integration therefore separates three responsibilities:
 
 1. `NonOverlappingKmerTokenizer` losslessly maps canonical full k-mers to fixed
    ids and falls back to individual bases for ambiguous or trailing content.
-2. `OrderedStreamWindowDataset` assigns complete biological sequences to batch
-   slots and emits `[batch, gradient horizon, 32]` windows without interleaving
+2. `OrderedStreamWindowDataset` assigns complete logical streams to batch slots
+   and emits `[batch, gradient horizon, 32]` windows without interleaving
    identities within a row.
 3. `StatefulCausalBatchAdapter` owns the `stream_id -> TitansState` table,
    carries state between windows, and detaches it at each gradient-horizon
@@ -57,13 +57,50 @@ long genomic sequences, then run:
 synbiotorch train examples/configs/pretrain_titans_mac.yaml
 ```
 
-The initial implementation intentionally rejects generic packed/Parquet
-streaming, DDP, AMP, `torch.compile`, gradient checkpointing, and DataLoader
-workers. Those features require explicit stream-ownership or higher-order
-autograd validation; silently accepting them would make the memory semantics
-ambiguous. Training is step-budgeted and currently reports token-level causal
-cross-entropy. Represented-base counts are preserved in every batch for a
-future bits-per-base metric.
+Training reports both token-level causal cross-entropy and exact bits per
+represented base. The latter is computed additively as total NLL divided by
+total represented-base count and `ln(2)`, including across gradient-accumulation
+microbatches and distributed ranks. It is not an average of per-batch ratios.
+
+For corpora larger than RAM, `materialize_encoded_streams` atomically publishes
+domain-neutral pre-tokenized streams as checksummed NumPy shards plus a versioned
+JSON manifest. `TokenStreamStore` reopens those shards read-only with mmap, and
+`OrderedStreamWindowDataset.from_store` schedules the logical views without
+copying a complete corpus into Python tuples. `materialize_token_streams` is the
+sequence/tokenizer convenience layer over the same storage format.
+
+The complete adaptive training path still rejects DDP, AMP, `torch.compile`,
+gradient checkpointing, generic token packing, and DataLoader workers at config
+validation. Some prerequisites are now independently validated, but the gates
+remain until the end-to-end state and checkpoint contracts in the readiness
+table below are satisfied.
+
+## Domain-neutral systems probe
+
+The offline probe creates deterministic weighted token streams, materializes and
+reopens them through mmap, trains adaptive memory, validates on separate stream
+identities, and prints exact loss/BPB plus observed throughput:
+
+```bash
+uv run python examples/titans_systems_probe.py \
+  --tokens-per-stream 4096 \
+  --steps 10
+```
+
+The manifest directory is content-addressed by the probe specification and is
+reused only after checksum and index validation.
+
+## Execution readiness
+
+| Concern | Validated now | Remaining gate |
+|---|---|---|
+| Long-stream I/O | Immutable manifests, checksums, mmap views, exact cursor resume | Wire store selection into the top-level run config |
+| Metrics | Additive token NLL and represented-base BPB; two-process global ratio reduction | Exercise at production rank and corpus scale |
+| DDP ownership | Deterministic, disjoint rank partitions whose union is the selected split | Equalize optimizer-step schedules, route stateful forward through DDP, and checkpoint every rank's cursor and fast state |
+| AMP | Attention may autocast while fast-memory state/update arithmetic stays parameter-dtype; CPU BF16 higher-order gradients are finite | CUDA BF16/FP16 accuracy, scaler, and resume qualification |
+| Compilation | No-memory inference passes a full-graph compile probe | Adaptive `autograd.grad` update semantics and graph-break policy |
+| Workers | Mmap storage is separate from scheduling and can be reopened independently | Central ownership and resumable prefetch; worker-local cursor copies remain rejected |
+| Packing | Windows preserve next-token labels inside a stream and never cross identities | A boundary-aware stateful packer; generic concatenating packers remain invalid |
 
 ## Direct use
 
@@ -87,8 +124,8 @@ overlapping prefixes.
 
 The tests cover causal masking, no future-token leakage, the one-position
 fast-weight recurrence, higher-order gradients through memory updates, stream
-isolation, boundary-spanning next-token labels, deterministic generation, an
-end-to-end pipeline run, and bit-for-bit interrupted/resumed training. The
-implementation matches the Stage C architecture and execution contract; it does
-not claim reproduction of the paper's genomic corpus or reported learning
-curves without running that experiment.
+isolation, boundary-spanning next-token labels, deterministic generation,
+additive BPB, mmap integrity and cursor resume, rank ownership and reduction,
+the precision/compile boundaries, an end-to-end pipeline run, and bit-for-bit
+interrupted/resumed training. Architecture and systems invariants are separate
+from any domain-corpus reproduction claim.

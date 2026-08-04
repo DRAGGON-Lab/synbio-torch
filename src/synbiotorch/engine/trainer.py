@@ -18,7 +18,7 @@ from __future__ import annotations
 import itertools
 from contextlib import nullcontext
 from pathlib import Path
-from typing import ContextManager, Iterable, Sequence
+from typing import Any, ContextManager, Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -26,7 +26,13 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from synbiotorch.config import TrainConfig
-from synbiotorch.distributed import DistContext, broadcast_flag, reduce_mean, single_process_context
+from synbiotorch.distributed import (
+    DistContext,
+    broadcast_flag,
+    reduce_mean,
+    reduce_ratios,
+    single_process_context,
+)
 from synbiotorch.engine.batch import BatchAdapter, TensorBatchAdapter
 from synbiotorch.exceptions import ConfigError
 from synbiotorch.reproducibility import rng_state, set_rng_state
@@ -149,6 +155,29 @@ class Trainer:
         self._val_loader: DataLoader | None = None
         self._train_loader: DataLoader | None = None
         self._last_eval_metrics: dict[str, float] = {}
+        self._last_train_metrics: dict[str, float] = {}
+
+    @staticmethod
+    def _batch_metric_contributions(
+        adapter: BatchAdapter,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        batch: Any,
+    ) -> Mapping[str, tuple[torch.Tensor, torch.Tensor]]:
+        collect = getattr(adapter, "metric_contributions", None)
+        return collect(logits, labels, batch) if callable(collect) else {}
+
+    @staticmethod
+    def _add_contributions(
+        totals: dict[str, tuple[float, float]],
+        contributions: Mapping[str, tuple[torch.Tensor, torch.Tensor]],
+    ) -> None:
+        for name, (numerator, denominator) in contributions.items():
+            previous_numerator, previous_denominator = totals.get(name, (0.0, 0.0))
+            totals[name] = (
+                previous_numerator + float(numerator.detach().cpu().double()),
+                previous_denominator + float(denominator.detach().cpu().double()),
+            )
 
     def _trainable_params(self) -> list[torch.nn.Parameter]:
         return [p for p in self._base_model.parameters() if p.requires_grad]
@@ -204,9 +233,9 @@ class Trainer:
                 self.current_epoch = epoch
                 train_loss = self._train_epoch(train_loader, epoch)
                 if step_based_eval:
-                    last_metrics = self._last_eval_metrics or last_metrics
+                    last_metrics = {**self._last_train_metrics, **self._last_eval_metrics} or last_metrics
                 else:
-                    metrics = {"train_loss": train_loss}
+                    metrics = self._last_train_metrics or {"train_loss": train_loss}
                     if val_loader is not None:
                         metrics.update(self._validate(val_loader))
                     last_metrics = metrics
@@ -228,6 +257,8 @@ class Trainer:
         self.optimizer.zero_grad()
         total = 0.0
         count = 0
+        metric_totals: dict[str, tuple[float, float]] = {}
+        step_metric_totals: dict[str, tuple[float, float]] = {}
         eval_every = self.config.eval_every_n_steps
         for step, batch in enumerate(loader):
             batch = self.adapter.to_device(batch, self.device)
@@ -239,6 +270,9 @@ class Trainer:
             ):
                 logits = self.adapter.forward(self.model, batch)
                 loss = self.task.loss(logits, labels) / self.config.grad_accum
+            contributions = self._batch_metric_contributions(self.adapter, logits, labels, batch)
+            self._add_contributions(metric_totals, contributions)
+            self._add_contributions(step_metric_totals, contributions)
             is_update_step = (step + 1) % self.config.grad_accum == 0
             # Under DDP, skip the gradient all-reduce on accumulation micro-steps;
             # sync only on the step that actually applies the update.
@@ -256,6 +290,9 @@ class Trainer:
                     "step_loss": float(loss.item() * self.config.grad_accum),
                     "lr": float(self.scheduler.get_last_lr()[0]),
                 }
+                for name, (numerator, denominator) in step_metric_totals.items():
+                    logs[f"step_{name}"] = numerator / max(1.0, denominator)
+                step_metric_totals = {}
                 for cb in self.callbacks:
                     cb.on_step_end(self, self.global_step, logs)
                 if eval_every and self.global_step % eval_every == 0 and self._val_loader is not None:
@@ -268,7 +305,13 @@ class Trainer:
             count += 1
             if self.should_stop:
                 break
-        return total / max(1, count)
+        mean_loss = total / max(1, count)
+        ratios = reduce_ratios(metric_totals, self.dist)
+        self._last_train_metrics = {
+            "train_loss": ratios.pop("loss", mean_loss),
+            **{f"train_{name}": value for name, value in ratios.items()},
+        }
+        return self._last_train_metrics["train_loss"]
 
     def _grad_sync_context(self, is_update_step: bool) -> ContextManager:
         if not is_update_step and isinstance(self.model, DistributedDataParallel):
@@ -288,23 +331,32 @@ class Trainer:
         losses: list[float] = []
         preds: list[np.ndarray] = []
         labels_all: list[np.ndarray] = []
+        metric_totals: dict[str, tuple[float, float]] = {}
         for batch in loader:
             batch = self.val_adapter.to_device(batch, self.device)
             labels = self.val_adapter.labels(batch)
             logits = self.val_adapter.forward(self.model, batch)
             losses.append(self.task.loss(logits, labels).item())
+            self._add_contributions(
+                metric_totals,
+                self._batch_metric_contributions(self.val_adapter, logits, labels, batch),
+            )
             # Ravel to 1-D so batches of differing sequence length (MLM) still
             # concatenate; regression/classification predictions are already 1-D.
             preds.append(self.task.predict(logits).detach().cpu().numpy().ravel())
             labels_all.append(labels.detach().cpu().numpy().ravel())
-        metrics = {"val_loss": float(np.mean(losses)) if losses else 0.0}
+        metrics = {"loss": float(np.mean(losses)) if losses else 0.0}
         if preds:
             metrics.update(self.task.epoch_metrics(np.concatenate(preds), np.concatenate(labels_all)))
+        # Ordinary task metrics are rank means. Additive metrics instead sum
+        # their global numerators and denominators before division.
+        metrics = reduce_mean(metrics, self.dist)
+        metrics.update(reduce_ratios(metric_totals, self.dist))
         named = {f"val_{k}" if not k.startswith("val_") else k: v for k, v in metrics.items()}
         # Average across ranks so every rank sees identical metrics — this keeps
         # metric-driven decisions (early stop, best-checkpoint) consistent without
         # extra coordination. Each rank validates its own data shard.
-        return reduce_mean(named, self.dist)
+        return named
 
     def state_dict(self) -> dict[str, object]:
         """The full training state needed to resume: weights, optimizer, schedule,

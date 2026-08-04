@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
 from typing import Iterator, Mapping, Sequence, TypedDict
 
 import torch
@@ -12,20 +11,9 @@ from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
 from synbiotorch.datasets.mlm_collator import IGNORE_INDEX
+from synbiotorch.datasets.token_streams import TokenStream, TokenStreamStore
 from synbiotorch.tokenize.base import SpannedTokenizer
 from synbiotorch.types import Design
-
-
-@dataclass(frozen=True)
-class _TokenStream:
-    stream_id: str
-    input_ids: tuple[int, ...]
-    base_counts: tuple[int, ...]
-
-    @property
-    def examples(self) -> int:
-        return max(0, len(self.input_ids) - 1)
-
 
 StreamWindowBatch = dict[str, Tensor | tuple[str, ...]]
 
@@ -64,9 +52,7 @@ class OrderedStreamWindowDataset(IterableDataset[StreamWindowBatch]):
         shuffle_streams: bool = True,
     ) -> None:
         super().__init__()
-        if batch_size <= 0 or segment_length <= 0 or gradient_horizon <= 0:
-            raise ValueError("batch size, segment length, and gradient horizon must be positive")
-        streams: list[_TokenStream] = []
+        streams: list[TokenStream] = []
         for design in designs:
             if design.sequence is None or not design.sequence.elements:
                 continue
@@ -74,19 +60,71 @@ class OrderedStreamWindowDataset(IterableDataset[StreamWindowBatch]):
             if len(encoded.input_ids) < 2:
                 continue
             streams.append(
-                _TokenStream(
+                TokenStream(
                     stream_id=design.iri,
                     input_ids=tuple(encoded.input_ids),
                     base_counts=tuple(encoded.represented_base_counts),
                 )
             )
+        self._initialize(
+            streams,
+            batch_size=batch_size,
+            pad_token_id=tokenizer.pad_token_id,
+            segment_length=segment_length,
+            gradient_horizon=gradient_horizon,
+            seed=seed,
+            shuffle_streams=shuffle_streams,
+        )
+
+    @classmethod
+    def from_store(
+        cls,
+        store: TokenStreamStore,
+        *,
+        batch_size: int,
+        split: str | None = None,
+        owner_rank: int = 0,
+        owner_count: int = 1,
+        segment_length: int = 32,
+        gradient_horizon: int = 3,
+        seed: int = 42,
+        shuffle_streams: bool = True,
+    ) -> "OrderedStreamWindowDataset":
+        """Build windows over mmap-backed streams owned by one process."""
+
+        dataset = cls.__new__(cls)
+        IterableDataset.__init__(dataset)
+        dataset._initialize(
+            store.streams(split=split, owner_rank=owner_rank, owner_count=owner_count),
+            batch_size=batch_size,
+            pad_token_id=store.pad_token_id,
+            segment_length=segment_length,
+            gradient_horizon=gradient_horizon,
+            seed=seed,
+            shuffle_streams=shuffle_streams,
+        )
+        return dataset
+
+    def _initialize(
+        self,
+        streams: Sequence[TokenStream],
+        *,
+        batch_size: int,
+        pad_token_id: int,
+        segment_length: int,
+        gradient_horizon: int,
+        seed: int,
+        shuffle_streams: bool,
+    ) -> None:
+        if batch_size <= 0 or segment_length <= 0 or gradient_horizon <= 0:
+            raise ValueError("batch size, segment length, and gradient horizon must be positive")
         if not streams:
             raise ValueError("ordered stream training requires at least one two-token sequence")
         if len({stream.stream_id for stream in streams}) != len(streams):
             raise ValueError("ordered stream identities must be unique")
         self.streams = tuple(streams)
         self.batch_size = batch_size
-        self.pad_token_id = tokenizer.pad_token_id
+        self.pad_token_id = pad_token_id
         self.segment_length = segment_length
         self.gradient_horizon = gradient_horizon
         self.seed = seed
@@ -116,7 +154,7 @@ class OrderedStreamWindowDataset(IterableDataset[StreamWindowBatch]):
             self._fill(slot)
         self.exhausted = False
 
-    def _window(self, stream: _TokenStream, offset: int) -> _WindowRow:
+    def _window(self, stream: TokenStream, offset: int) -> _WindowRow:
         width = self.gradient_horizon * self.segment_length
         count = min(width, stream.examples - offset)
         input_values = list(stream.input_ids[offset : offset + count])

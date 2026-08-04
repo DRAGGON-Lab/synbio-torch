@@ -147,6 +147,11 @@ class NeuralMemory(nn.Module):
     def _functional_memory(self, weights: Mapping[str, Tensor], inputs: Tensor) -> Tensor:
         return functional_call(self.memory, OrderedDict(weights.items()), (inputs,), strict=True)
 
+    def _memory_inputs(self, inputs: Tensor) -> Tensor:
+        """Keep fast weights and their higher-order update arithmetic in one dtype."""
+
+        return inputs.to(dtype=next(self.memory.parameters()).dtype)
+
     def _project(
         self,
         projection: nn.Linear,
@@ -168,13 +173,17 @@ class NeuralMemory(nn.Module):
         return values / values.norm(dim=-1, keepdim=True).clamp_min(epsilon)
 
     def read_with_history(self, state: NeuralMemoryState, inputs: Tensor) -> tuple[Tensor, Tensor]:
-        queries, history = self._project(
-            self.query_projection,
-            self.query_convolution,
-            inputs,
-            state.query_history,
-        )
-        return self._functional_memory(state.fast_weights, self._unit(queries)), history
+        # Attention can use the enclosing AMP policy, but the functional fast
+        # weights and autograd-through-update recurrence remain parameter-dtype.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            memory_inputs = self._memory_inputs(inputs)
+            queries, history = self._project(
+                self.query_projection,
+                self.query_convolution,
+                memory_inputs,
+                state.query_history,
+            )
+            return self._functional_memory(state.fast_weights, self._unit(queries)), history
 
     def _project_writes(self, state: NeuralMemoryState, inputs: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         keys, history = self._project(
@@ -225,39 +234,41 @@ class NeuralMemory(nn.Module):
         query_history: Tensor,
         create_graph: bool,
     ) -> NeuralMemoryState:
-        keys, values, write_history = self._project_writes(state, inputs)
-        gates = self.gates(inputs)
-        fast_weights = OrderedDict(state.fast_weights.items())
-        surprise = OrderedDict(state.surprise.items())
-        for position in range(inputs.shape[0]):
-            if not bool(valid_mask[position].item()):
-                continue
-            gradient = self._surprise_gradient(
-                fast_weights,
-                keys[position],
-                values[position],
-                create_graph=create_graph,
-            )
-            next_surprise: TensorMap = OrderedDict()
-            next_weights: TensorMap = OrderedDict()
-            for name in fast_weights:
-                alpha = gates.alpha[name][position]
-                eta = gates.eta[name][position]
-                theta = gates.theta[name][position]
-                next_surprise[name] = eta * surprise[name] - theta * gradient[name]
-                next_weights[name] = (1.0 - alpha) * fast_weights[name] + next_surprise[name]
-            if not create_graph:
-                next_weights = OrderedDict(
-                    (name, value.detach().requires_grad_(True)) for name, value in next_weights.items()
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            memory_inputs = self._memory_inputs(inputs)
+            keys, values, write_history = self._project_writes(state, memory_inputs)
+            gates = self.gates(memory_inputs)
+            fast_weights = OrderedDict(state.fast_weights.items())
+            surprise = OrderedDict(state.surprise.items())
+            for position in range(memory_inputs.shape[0]):
+                if not bool(valid_mask[position].item()):
+                    continue
+                gradient = self._surprise_gradient(
+                    fast_weights,
+                    keys[position],
+                    values[position],
+                    create_graph=create_graph,
                 )
-                next_surprise = OrderedDict((name, value.detach()) for name, value in next_surprise.items())
-            fast_weights, surprise = next_weights, next_surprise
-        return NeuralMemoryState(
-            fast_weights=fast_weights,
-            surprise=surprise,
-            query_history=query_history,
-            write_history=write_history,
-        )
+                next_surprise: TensorMap = OrderedDict()
+                next_weights: TensorMap = OrderedDict()
+                for name in fast_weights:
+                    alpha = gates.alpha[name][position]
+                    eta = gates.eta[name][position]
+                    theta = gates.theta[name][position]
+                    next_surprise[name] = eta * surprise[name] - theta * gradient[name]
+                    next_weights[name] = (1.0 - alpha) * fast_weights[name] + next_surprise[name]
+                if not create_graph:
+                    next_weights = OrderedDict(
+                        (name, value.detach().requires_grad_(True)) for name, value in next_weights.items()
+                    )
+                    next_surprise = OrderedDict((name, value.detach()) for name, value in next_surprise.items())
+                fast_weights, surprise = next_weights, next_surprise
+            return NeuralMemoryState(
+                fast_weights=fast_weights,
+                surprise=surprise,
+                query_history=query_history,
+                write_history=write_history,
+            )
 
     def freeze(
         self,
@@ -266,10 +277,11 @@ class NeuralMemory(nn.Module):
         *,
         query_history: Tensor,
     ) -> NeuralMemoryState:
-        _, _, write_history = self._project_writes(state, inputs)
-        return NeuralMemoryState(
-            fast_weights=state.fast_weights,
-            surprise=state.surprise,
-            query_history=query_history,
-            write_history=write_history,
-        )
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            _, _, write_history = self._project_writes(state, self._memory_inputs(inputs))
+            return NeuralMemoryState(
+                fast_weights=state.fast_weights,
+                surprise=state.surprise,
+                query_history=query_history,
+                write_history=write_history,
+            )
