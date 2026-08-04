@@ -90,7 +90,7 @@ See [data.md](data.md) for the corpus sources in depth.
 | `num_layers` | int | `4` | Number of MAC blocks. |
 | `num_attention_heads` | int | `4` | Attention heads; must divide `model.hidden_size`. |
 | `persistent_tokens` | int | `4` | Learned persistent tokens in each `[P; H; Z]` attention layout. |
-| `segment_length` | int | `32` | Fixed Stage C segment width; other values are currently rejected. |
+| `segment_length` | int | `32` | Fixed TITANS MAC segment width; other values are currently rejected. |
 | `memory_expansion_factor` | int | `4` | Hidden expansion of the functional residual-memory MLP. |
 | `projection_kernel_size` | int | `4` | Causal depthwise Q/K/V projection kernel. |
 | `alpha_initial` | float | `0.001` | Initial memory-decay gate. |

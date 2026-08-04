@@ -84,8 +84,8 @@ class NonOverlappingKmerTokenizer:
 
     Canonical full-width chunks become one k-mer token. Ambiguous bases and a
     trailing partial chunk fall back one base at a time, so encoding never drops
-    source sequence. For ``k=6`` the vocabulary is the Stage C c16 vocabulary:
-    pad, unknown, N/A/C/G/T, then all 4,096 canonical six-mers.
+    source sequence. For ``k=6`` the vocabulary contains pad, unknown,
+    N/A/C/G/T, then all 4,096 canonical six-mers.
     """
 
     _SINGLE = {"N": 2, "A": 3, "C": 4, "G": 5, "T": 6}

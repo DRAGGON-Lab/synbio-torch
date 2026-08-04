@@ -1,7 +1,7 @@
 # TITANS Memory-as-Context
 
 synbio-torch contains a minimal, state-explicit implementation of the
-Memory-as-Context (MAC) architecture used by the Stage C c16 experiments. It is
+TITANS Memory-as-Context (MAC) architecture. It is
 selected with `model.kind: titans_mac`; it does not reuse a HuggingFace backbone.
 
 ## Architecture

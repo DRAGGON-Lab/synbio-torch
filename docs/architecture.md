@@ -64,6 +64,7 @@ writing checkpoints and metrics.
 
 | Layer | Module | Responsibility |
 |-------|--------|----------------|
+| Experiments | `synbiotorch.experiments` | Resolves a `RunConfig` template and varied values into executable runs and matched contrasts. |
 | Config | `synbiotorch.config` | One Pydantic `RunConfig` per run; validated, serialized. |
 | Sources | `synbiotorch.sources` | Corpus sources (FASTA, table, GenBank, SBOL, sbol-db, synthetic), each normalizing to `Design`. |
 | Data | `synbiotorch.data` | The `Corpus` protocol, `build_corpus`, and sharded Parquet materialization. |
@@ -91,6 +92,9 @@ writing checkpoints and metrics.
 
 ## Reproducibility
 
+- An experiment and its resolved runs have stable content identities. Every run
+  contains a validated `RunConfig`; non-reference execution values require
+  invariant evidence. See [experiments.md](experiments.md).
 - A run is fully specified by its `RunConfig`; the resolved config is written to
   `<output_dir>/config.resolved.yaml`.
 - `seed` seeds Python, NumPy, and torch. The in-memory split is a pure function of

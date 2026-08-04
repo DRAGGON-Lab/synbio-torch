@@ -108,7 +108,7 @@ class ArchConfig(BaseModel):
 
 
 class TitansConfig(BaseModel):
-    """Paper-deep Memory-as-Context architecture from the Stage C c16 study."""
+    """Paper-deep TITANS Memory-as-Context architecture."""
 
     num_layers: int = 4
     num_attention_heads: int = 4

@@ -71,7 +71,7 @@ MLM supports two modes via `model.from_scratch`:
 |-----------|-------------|
 | `hf` | Any pretrained HuggingFace `AutoTokenizer` (DNABERT-2, Nucleotide Transformer, …), wrapped behind the library's tokenizer protocol. |
 | `kmer` | Overlapping k-mers over `{A,C,G,T}`; ambiguous bases map to `<unk>`. |
-| `nonoverlap_kmer` | Lossless non-overlapping canonical k-mers with single-base fallback; Stage C uses `k: 6` (4,103 ids). |
+| `nonoverlap_kmer` | Lossless non-overlapping canonical k-mers with single-base fallback; `k: 6` has 4,103 ids. |
 | `char` | Character-level over a nucleotide (IUPAC) or protein alphabet (`tokenizer.alphabet`). |
 
 All expose the same protocol (`vocab_size`, `pad_token_id`, `mask_token_id`,

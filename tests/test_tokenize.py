@@ -57,7 +57,7 @@ def test_char_protein_alphabet():
     assert tok.vocab_size != CharTokenizer(alphabet="dna").vocab_size
 
 
-def test_nonoverlap_sixmer_is_lossless_and_stage_c_sized():
+def test_nonoverlap_sixmer_is_lossless_and_has_expected_vocab_size():
     tok = NonOverlappingKmerTokenizer(k=6)
     sequence = "ACGTACNNRYTAC"
     encoded = tok.tokenize_content_with_spans(sequence)

@@ -1,0 +1,97 @@
+schema_version: 1
+name: titans-memory-methodological-inquiry
+description: >-
+  Test whether adaptive long-term memory improves causal sequence modeling
+  against matched frozen-memory and no-memory controls.
+
+# This is an ordinary, valid RunConfig. Variables below replace its named leaves
+# to produce concrete runs. Replace this synthetic corpus with the long-genome
+# FASTA corpus later without changing the experiment structure.
+run:
+  seed: 42
+  output_dir: runs/titans-memory-methodological-inquiry
+  corpus:
+    source: synthetic
+    n: 16
+    synthetic_seed: 7
+    cache_dir: .synbiotorch_cache/titans-methodological-inquiry
+    shard_size: 8
+  tokenizer:
+    kind: nonoverlap_kmer
+    k: 1
+  encoder:
+    kind: sequence
+  model:
+    kind: titans_mac
+    hidden_size: 8
+    titans:
+      num_layers: 1
+      num_attention_heads: 2
+      persistent_tokens: 2
+      segment_length: 32
+      memory_expansion_factor: 2
+      projection_kernel_size: 4
+      alpha_initial: 0.001
+      eta_initial: 0.9
+      theta_initial: 0.001
+      tie_embeddings: true
+  task:
+    kind: causal
+  stream:
+    enabled: true
+    gradient_horizon: 1
+    memory_mode: adaptive
+    shuffle_streams: false
+  splits:
+    strategy: random
+    ratios: [0.75, 0.25, 0.0]
+  train:
+    batch_size: 2
+    max_steps: 1
+    eval_every_n_steps: 1
+    checkpoint_every_n_steps: 1
+    lr: 0.00003
+    weight_decay: 0.1
+    max_grad_norm: 0.5
+    amp: false
+    precision: fp32
+    num_workers: 0
+    compile: false
+    distributed:
+      strategy: none
+  wandb:
+    enabled: false
+
+variables:
+  - name: memory_condition
+    path: stream.memory_mode
+    values: [adaptive, frozen, none]
+  - name: seed
+    path: seed
+    values: [42, 43]
+
+contrasts:
+  - name: adaptive_vs_frozen
+    treatment:
+      memory_condition: adaptive
+    control:
+      memory_condition: frozen
+    metric: bits_per_base
+    direction: lower
+  - name: adaptive_vs_none
+    treatment:
+      memory_condition: adaptive
+    control:
+      memory_condition: none
+    metric: bits_per_base
+    direction: lower
+
+# Keys in reference identify execution variables. Runs with other values for
+# those keys require qualification evidence before they can resolve.
+reference: {}
+invariants:
+  - stream_ownership
+  - stream_boundary_reset
+  - higher_order_autograd
+  - represented_unit_accounting
+qualifications: []

@@ -13,6 +13,7 @@ from __future__ import annotations
 from synbiotorch.config import RunConfig
 from synbiotorch.data.corpus import build_corpus
 from synbiotorch.data.materialize import materialize
+from synbiotorch.experiments import Experiment, Run
 from synbiotorch.generate import generate, generate_sequence, generate_titans
 from synbiotorch.pipeline import prepare_data, run_training
 from synbiotorch.types import Alphabet, Design, Feature, Sequence
@@ -21,6 +22,8 @@ __version__ = "0.1.0"
 
 __all__ = [
     "RunConfig",
+    "Experiment",
+    "Run",
     "Design",
     "Sequence",
     "Feature",

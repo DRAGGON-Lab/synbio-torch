@@ -88,7 +88,7 @@ metrics = st.run_training(config)
 | [`finetune_structure_aware.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/finetune_structure_aware.yaml) | Sequence + feature-boundary markers. |
 | [`train_graph.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/train_graph.yaml) | Graph transformer over the composition graph. |
 | [`pretrain_causal_long.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/pretrain_causal_long.yaml) | Long-context causal pretraining: RoPE decoder, SDPA, streamed + packed corpus. |
-| [`pretrain_titans_mac.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/pretrain_titans_mac.yaml) | Stage C-shaped TITANS MAC causal pretraining over ordered genomic streams. |
+| [`pretrain_titans_mac.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/pretrain_titans_mac.yaml) | TITANS MAC causal pretraining over ordered genomic streams. |
 | [`finetune_protein.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/finetune_protein.yaml) | Protein regression from a labeled CSV table with the protein char tokenizer. |
 | [`benchmark_dna_classification.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/benchmark_dna_classification.yaml) | Genomics-ML benchmark shape: a labeled table fed to a pretrained DNA backbone for classification. |
 | [`ingest_genbank.yaml`](https://github.com/marpaia/synbio-torch/blob/master/examples/configs/ingest_genbank.yaml) | Import GenBank to the Parquet cache via the native binding. |

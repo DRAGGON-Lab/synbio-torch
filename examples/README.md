@@ -27,6 +27,24 @@ represented-unit BPB reporting:
 uv run python examples/titans_systems_probe.py --tokens-per-stream 4096 --steps 10
 ```
 
+The composed experiment is a runnable `RunConfig` plus varied conditions and
+seeds. It resolves directly to six executable runs:
+
+```bash
+uv run synbiotorch experiment show \
+  examples/experiments/titans_methodological_inquiry.yaml
+```
+
+Run all six small synthetic conditions with:
+
+```bash
+uv run synbiotorch experiment run \
+  examples/experiments/titans_methodological_inquiry.yaml
+```
+
+See [`docs/experiments.md`](../docs/experiments.md) for the identity and
+qualification model.
+
 | Config | Task | Data | Prerequisites |
 |--------|------|------|---------------|
 | [`train_graph.yaml`](configs/train_graph.yaml) | Graph transformer regression | synthetic | `WANDB_API_KEY` (or set `wandb.enabled: false`) |

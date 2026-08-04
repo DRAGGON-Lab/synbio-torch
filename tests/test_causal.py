@@ -1,4 +1,4 @@
-"""Stage-3 generative path: causal-LM objective, decoder model, and sampling.
+"""Causal-LM objective, decoder model, and sampling.
 
 The discipline: the collator's next-token shift is checked directly; a tiny causal
 LM is shown to actually learn next-token prediction; and a model trained on a

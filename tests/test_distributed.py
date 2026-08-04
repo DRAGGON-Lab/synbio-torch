@@ -1,4 +1,4 @@
-"""Stage-5 distributed orchestration (DDP), validated GPU-free on gloo.
+"""Distributed orchestration (DDP), validated GPU-free on gloo.
 
 The discipline: the rank-aware data partition is proven disjoint+covering, and the
 headline — a 2-rank DDP run produces the same weights as single-process training

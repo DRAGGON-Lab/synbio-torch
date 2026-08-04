@@ -1,4 +1,4 @@
-"""Stage-1 robustness: precision resolution, step budgeting, mid-epoch eval, and
+"""Precision resolution, step budgeting, mid-epoch evaluation, and
 the resume guarantee — a checkpoint-and-resume run reproduces the uninterrupted
 one. These run on CPU with a tiny dropout-free model so the equivalence is exact.
 """

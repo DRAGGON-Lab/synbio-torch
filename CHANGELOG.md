@@ -8,7 +8,7 @@ follow semantic versioning.
 
 ### Added
 
-- A minimal Stage C-compatible TITANS Memory-as-Context causal model with
+- A minimal TITANS Memory-as-Context causal model with
   explicit functional fast-memory state, paper-exact sequential updates,
   lossless non-overlapping k-mer tokenization, ordered stream windows,
   checkpointed stream cursors and states, and segment-aware generation.

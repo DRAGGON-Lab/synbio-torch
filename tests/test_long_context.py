@@ -1,4 +1,4 @@
-"""Stage-4 long context + modern attention: RoPE architectures, SDPA, and the
+"""Long context and modern attention: RoPE architectures, SDPA, and the
 long-sequence behavior that distinguishes them from absolute-position models.
 
 The discipline: the attention implementation and rotary base are shown to land on
