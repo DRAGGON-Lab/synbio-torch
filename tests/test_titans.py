@@ -374,12 +374,12 @@ def test_titans_config_rejects_unsafe_initial_execution_modes():
     base = {
         "corpus": {"source": "synthetic"},
         "tokenizer": {"kind": "nonoverlap_kmer", "k": 6},
-        "model": {"kind": "titans_mac", "hidden_size": 8, "titans": {"num_attention_heads": 2}},
+        "model": {"kind": "titans", "hidden_size": 8, "titans": {"num_attention_heads": 2}},
         "task": {"kind": "causal"},
         "stream": {"enabled": True},
         "train": {"max_steps": 1, "amp": False, "precision": "fp32"},
     }
-    assert RunConfig.model_validate(base).model.kind == "titans_mac"
+    assert RunConfig.model_validate(base).model.kind == "titans"
     unsafe = [
         {**base, "streaming": True},
         {**base, "packing": {"enabled": True}},
@@ -405,7 +405,7 @@ def test_titans_pipeline_runs_through_existing_trainer(tmp_path):
         ),
         tokenizer=TokenizerConfig(kind="nonoverlap_kmer", k=1),
         model=ModelConfig(
-            kind="titans_mac",
+            kind="titans",
             hidden_size=8,
             titans=_architecture(),
         ),

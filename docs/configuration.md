@@ -67,7 +67,7 @@ See [data.md](data.md) for the corpus sources in depth.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `kind` | `transformers` \| `titans_mac` | `transformers` | Select the standard HuggingFace/graph family or the state-explicit TITANS MAC causal LM. |
+| `kind` | `transformers` \| `titans` | `transformers` | Select the standard HuggingFace/graph family or the state-explicit TITANS MAC causal LM. |
 | `kind` | `sequence` \| `structure_aware` \| `graph` | `sequence` | Input modality. |
 | `roles` | list[str] | `null` | `structure_aware`: role IRIs that get dedicated boundary markers. `null` falls back to a default Sequence Ontology set (promoter/RBS/CDS/terminator). |
 | `mark_orientation` | bool | `true` | `structure_aware`: emit a marker for reverse-complement features. |
@@ -81,7 +81,7 @@ See [data.md](data.md) for the corpus sources in depth.
 | `dropout` | float | `0.1` | Head dropout. |
 | `from_scratch` | bool | `false` | Build an untrained encoder from `arch` + the tokenizer/encoder vocab instead of loading pretrained weights. |
 | `arch` | object | defaults | Architecture for `from_scratch` (and the graph model). |
-| `titans` | object | defaults | TITANS MAC architecture, used only when `kind: titans_mac`. |
+| `titans` | object | defaults | TITANS MAC architecture, used only when `kind: titans`. |
 
 ### `model.titans`
 
@@ -139,7 +139,7 @@ This section is for recurrent/fast-weight model state, while top-level
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `enabled` | bool | `false` | Preserve biological stream identity and carry model state between ordered windows. Required by `titans_mac`. |
+| `enabled` | bool | `false` | Preserve biological stream identity and carry model state between ordered windows. Required by `titans`. |
 | `gradient_horizon` | int | `3` | Number of 32-token segments linked by autograd before state is detached. |
 | `memory_mode` | `adaptive` \| `frozen` \| `none` | `adaptive` | Read/write memory, read-only memory, or zero retrieval/no update. |
 | `shuffle_streams` | bool | `true` | Seeded shuffle of whole stream assignment; never shuffles tokens within a stream. |

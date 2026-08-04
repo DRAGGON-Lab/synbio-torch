@@ -141,7 +141,7 @@ class TitansConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    kind: Literal["transformers", "titans_mac"] = "transformers"
+    kind: Literal["transformers", "titans"] = "transformers"
     # A HuggingFace hub id, or a local path to a checkpoint saved by a prior run
     # (e.g. the backbone written out by an MLM pretraining run).
     backbone: str = "zhihan1996/DNABERT-2-117M"
@@ -155,7 +155,7 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_model(self) -> "ModelConfig":
-        if self.kind == "titans_mac" and self.hidden_size % self.titans.num_attention_heads:
+        if self.kind == "titans" and self.hidden_size % self.titans.num_attention_heads:
             raise ConfigError("model.hidden_size must be divisible by TITANS attention heads")
         return self
 
@@ -307,16 +307,16 @@ class RunConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_cross_layer_contracts(self) -> "RunConfig":
-        if self.model.kind != "titans_mac":
+        if self.model.kind != "titans":
             if self.stream.enabled:
-                raise ConfigError("stream.enabled currently requires model.kind: titans_mac")
+                raise ConfigError("stream.enabled currently requires model.kind: titans")
             return self
         if self.task.kind != "causal":
-            raise ConfigError("model.kind: titans_mac requires task.kind: causal")
+            raise ConfigError("model.kind: titans requires task.kind: causal")
         if self.tokenizer.kind != "nonoverlap_kmer":
-            raise ConfigError("model.kind: titans_mac currently requires tokenizer.kind: nonoverlap_kmer")
+            raise ConfigError("model.kind: titans currently requires tokenizer.kind: nonoverlap_kmer")
         if not self.stream.enabled:
-            raise ConfigError("model.kind: titans_mac requires stream.enabled: true")
+            raise ConfigError("model.kind: titans requires stream.enabled: true")
         if self.streaming or self.packing.enabled:
             raise ConfigError("TITANS ordered streams do not use generic streaming or token packing")
         if self.train.max_steps is None:

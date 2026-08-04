@@ -22,7 +22,7 @@ run:
   encoder:
     kind: sequence
   model:
-    kind: titans_mac
+    kind: titans
     hidden_size: 8
     titans:
       num_layers: 1

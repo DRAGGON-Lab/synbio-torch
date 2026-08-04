@@ -39,7 +39,7 @@ def build_model(
     - ``frozen`` → a SequenceModel with a frozen backbone and a trainable head.
     - ``supervised`` → a SequenceModel fine-tuned end to end.
     """
-    if model_config.kind == "titans_mac":
+    if model_config.kind == "titans":
         if task_config.kind != "causal":
             raise ValueError("TITANS MAC is available only for the causal task")
         if vocab_size is None or pad_token_id is None:

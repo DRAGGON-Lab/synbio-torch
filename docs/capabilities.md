@@ -47,7 +47,7 @@ All three produce batches consumed by one training engine through a
   which completes a design from a prefix (greedy with `--temperature 0`, or sampled
   with `--temperature`/`--top-k`/`--top-p`). The same is available in Python as
   `st.generate_sequence(model, tokenizer, prompt, max_new_tokens=...)`.
-- **TITANS MAC causal** (`model.kind: titans_mac`) carries an explicit neural
+- **TITANS MAC causal** (`model.kind: titans`) carries an explicit neural
   fast-memory state across ordered 32-token segments. It uses the same causal
   task and engine, but an identity-preserving stream dataset and stateful batch
   adapter; see [titans.md](titans.md).

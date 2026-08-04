@@ -26,7 +26,7 @@ Four independent axes are selected through narrow interfaces and configuration:
 - **Encoder** — the input modality, turning an `Design` into model input
   (`sequence`, `structure_aware`, `graph`).
 - **Model** — a conventional stateless backbone or a pure state-in/state-out
-  architecture (`transformers`, `titans_mac`).
+  architecture (`transformers`, `titans`).
 - **Task** — the training objective, owning loss and metrics (`supervised`,
   `frozen`, `mlm`, `causal`).
 

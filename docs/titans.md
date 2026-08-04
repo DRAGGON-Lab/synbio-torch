@@ -2,7 +2,7 @@
 
 synbio-torch contains a minimal, state-explicit implementation of the
 TITANS Memory-as-Context (MAC) architecture. It is
-selected with `model.kind: titans_mac`; it does not reuse a HuggingFace backbone.
+selected with `model.kind: titans`; it does not reuse a HuggingFace backbone.
 
 ## Architecture
 
@@ -49,12 +49,12 @@ change training memory.
 
 ## Configuration
 
-[`pretrain_titans_mac.yaml`](../examples/configs/pretrain_titans_mac.yaml) is the
+[`pretrain_titans.yaml`](../examples/configs/pretrain_titans.yaml) is the
 paper-shaped configuration. Replace its FASTA path with a corpus containing
 long genomic sequences, then run:
 
 ```bash
-synbiotorch train examples/configs/pretrain_titans_mac.yaml
+synbiotorch train examples/configs/pretrain_titans.yaml
 ```
 
 Training reports both token-level causal cross-entropy and exact bits per

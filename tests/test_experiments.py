@@ -32,7 +32,7 @@ def _titans_run(output_dir: Path) -> dict[str, Any]:
         },
         "tokenizer": {"kind": "nonoverlap_kmer", "k": 1},
         "model": {
-            "kind": "titans_mac",
+            "kind": "titans",
             "hidden_size": 8,
             "titans": {
                 "num_layers": 1,

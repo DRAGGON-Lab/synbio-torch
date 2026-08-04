@@ -265,7 +265,7 @@ def _run(config: RunConfig, ctx: DistContext, resume_from: str | Path | None) ->
             materialize(build_corpus(config.corpus), config.corpus.cache_dir, shard_size=config.corpus.shard_size)
         barrier(ctx)
 
-    if config.model.kind == "titans_mac":
+    if config.model.kind == "titans":
         data = prepare_data(config)
         model, train_loader, val_loader, adapter, val_adapter = _build_titans_run(config, data)
         corpus_ref, split_ref = data.corpus, data.split
