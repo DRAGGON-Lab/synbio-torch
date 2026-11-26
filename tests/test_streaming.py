@@ -21,6 +21,7 @@ from synbiotorch.config import (
     ArchConfig,
     CorpusConfig,
     EncoderConfig,
+    GraphArch,
     ModelConfig,
     PackingConfig,
     RunConfig,
@@ -255,6 +256,19 @@ def test_streaming_requires_hash_split(tmp_path):
 
 
 def test_streaming_graph_is_rejected(tmp_path):
-    config = _streaming_config(tmp_path, encoder=EncoderConfig(kind="graph"), task=TaskConfig(kind="supervised"))
+    config = _streaming_config(
+        tmp_path,
+        encoder=EncoderConfig(kind="graph"),
+        # The graph modality requires the graph architecture family; pair them
+        # so this exercises the streaming rejection and not the family check.
+        model=ModelConfig(hidden_size=32, arch=GraphArch(family="graph", num_hidden_layers=2, num_attention_heads=4)),
+        task=TaskConfig(kind="supervised"),
+    )
     with pytest.raises(ConfigError):
         run_training(config)
+
+
+def test_graph_encoder_requires_graph_family(tmp_path):
+    """The graph modality and a transformer architecture cannot be combined."""
+    with pytest.raises(ConfigError):
+        _streaming_config(tmp_path, encoder=EncoderConfig(kind="graph"), task=TaskConfig(kind="supervised"))

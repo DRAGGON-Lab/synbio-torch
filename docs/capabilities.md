@@ -1,8 +1,27 @@
 # Capabilities
 
-synbio-torch trains transformer models on SBOL data. The input modality, training
-objective, data source, and tokenizer are independent axes, each picked in
-configuration. Changing one reuses the same code path rather than branching it.
+synbio-torch trains sequence and graph models on SBOL data. The input modality,
+model architecture, training objective, data source, and tokenizer are
+independent axes, each picked in configuration. Changing one reuses the same
+code path rather than branching it.
+
+## Architecture families (`model.arch.family`)
+
+Architecture is independent of modality: `encoder.kind` decides the batch shape,
+`model.arch.family` decides what consumes it.
+
+| Family | Model | Objectives | Config |
+|--------|-------|-----------|--------|
+| `transformer` | HuggingFace encoder/decoder, pretrained or from scratch | all | [hollerer_scratch_char.yaml](../examples/configs/hollerer_scratch_char.yaml) |
+| `conv` | 1D convolutional motif scanner | `supervised` | [urtecho_reg_cnn.yaml](../examples/configs/urtecho_reg_cnn.yaml) |
+| `graph` | PyG attention network (`TransformerConv`) | `supervised`, `frozen` | [train_graph.yaml](../examples/configs/train_graph.yaml) |
+
+Convolution plus pooling is position-invariant by construction, which suits
+regulatory DNA — promoter elements are short motifs at variable offsets — and
+does it with far fewer parameters than attention. Transformers earn their keep
+when a pretrained backbone brings outside sequence knowledge. Adding a family is
+one config member, one `SequenceBackbone` subclass, and one branch; see
+[extending](extending.md).
 
 ## Input modalities (`encoder.kind`)
 

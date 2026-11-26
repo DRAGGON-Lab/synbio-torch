@@ -41,6 +41,8 @@ def build_task(task_config: "object") -> Task:
             objective=task_config.objective,
             num_classes=task_config.num_classes,
             target_transform=task_config.target_transform,
+            target_mean=task_config.target_mean,
+            target_std=task_config.target_std,
         )
     if task_config.kind == "mlm":
         from .mlm import MlmTask

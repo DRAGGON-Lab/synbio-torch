@@ -1,0 +1,69 @@
+# Urtecho 2020 E. coli promoter MPRA -> quantitative promoter activity
+# regression, from scratch with an overlapping k-mer tokenizer. The tokenizer
+# sibling of urtecho_reg_char: only the tokenizer block differs. k = 6 mirrors
+# the 6-mer frequency featurization the authors found strongest among their
+# simple models.
+# Prepare the corpus first: python examples/prepare_urtecho_promoters.py
+# Compares against Urtecho 2020 Figure 7B: test R^2 0.31 (tuned DragoNN CNN).
+#
+# The label is floored at 1.0 on the fitting partitions and left raw on test,
+# reproducing the authors' convention; eval_urtecho.py always scores against the
+# raw `expression` column.
+seed: 42
+output_dir: runs/urtecho_reg_kmer
+
+corpus:
+  source: table
+  path: data/urtecho_promoters/urtecho_promoters.csv
+  sequence_column: sequence
+  label_column: expression_train_floored
+  id_column: id
+  alphabet: dna
+  cache_dir: .synbiotorch_cache
+
+tokenizer:
+  kind: kmer
+  k: 6
+  stride: 1
+  max_length: 160
+
+encoder:
+  kind: sequence
+
+model:
+  from_scratch: true
+  hidden_size: 256
+  arch:
+    model_type: bert
+    num_hidden_layers: 4
+    num_attention_heads: 4
+    intermediate_size: 512
+    max_position_embeddings: 192
+
+task:
+  kind: supervised
+  objective: regression
+  # Train-partition statistics of expression_train_floored. Standardizing is an
+  # affine reparameterization: it leaves the objective and the reported metrics
+  # untouched. It is required here because the raw target is heavy tailed (76%
+  # of fitting rows sit at the floor, the rest reach 132), so the only
+  # informative residuals are large enough that gradient clipping discards them
+  # and training settles on predicting the mean.
+  target_transform: standardize
+  target_mean: 2.317813
+  target_std: 6.511066
+
+splits:
+  strategy: column
+  column: split
+
+train:
+  batch_size: 128
+  epochs: 20
+  lr: 1.0e-4
+  weight_decay: 0.01
+  amp: false
+  early_stop:
+    monitor: val_mae
+    mode: min
+    patience: 4

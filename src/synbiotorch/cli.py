@@ -10,6 +10,7 @@ from synbiotorch.data.corpus import build_corpus
 from synbiotorch.data.materialize import materialize
 from synbiotorch.generate import generate_sequence
 from synbiotorch.models import build_model
+from synbiotorch.models.backbone import transformer_arch
 from synbiotorch.pipeline import run_training
 from synbiotorch.tokenize.base import build_tokenizer
 
@@ -48,7 +49,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 temperature=args.temperature,
                 top_k=args.top_k,
                 top_p=args.top_p,
-                max_context=config.model.arch.max_position_embeddings,
+                max_context=transformer_arch(config.model, what="generation").max_position_embeddings,
                 seed=seed,
             )
         )

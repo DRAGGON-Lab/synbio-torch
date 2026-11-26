@@ -1,0 +1,73 @@
+# Urtecho 2020 E. coli promoter MPRA -> quantitative promoter activity
+# regression, using the authors' own architecture: a 3-layer 1D convolutional
+# motif scanner over DNA, the shape their 100-combination random hyperparameter
+# search selected (Methods, "Regression"). The architectural counterpart of the
+# transformer cells: same corpus, task, and fixed column split, so the held-out
+# R^2 is directly comparable both to them and to the published number.
+# Prepare the corpus first: python examples/prepare_urtecho_promoters.py
+# Compares against Urtecho 2020 Figure 7B: test R^2 0.31 (this architecture).
+#
+# The label is floored at 1.0 on the fitting partitions and left raw on test,
+# reproducing the authors' convention; eval_urtecho.py always scores against the
+# raw `expression` column.
+seed: 42
+output_dir: runs/urtecho_reg_cnn
+
+corpus:
+  source: table
+  path: data/urtecho_promoters/urtecho_promoters.csv
+  sequence_column: sequence
+  label_column: expression_train_floored
+  id_column: id
+  alphabet: dna
+  cache_dir: .synbiotorch_cache
+
+tokenizer:
+  kind: char
+  alphabet: dna
+  # 150 bp + <cls> + <sep>. Architecturally load-bearing: `pooling: flatten`
+  # sizes the head from this length, so every batch is padded to it.
+  max_length: 152
+
+encoder:
+  kind: sequence
+
+model:
+  dropout: 0.1340735187802852     # Urtecho Methods, "Dropout"
+  arch:
+    family: conv
+    channels: [19, 39, 54]        # "Number of filters (for each layer)"
+    kernel_sizes: [16, 17, 18]    # "Convolutional filter width (for each layer)"
+    pool_width: 16                # "Pooling width"
+    embed_dim: 4                  # learned, and able to represent one-hot ACGT exactly
+    activation: relu
+    # Keeps the positional layout the filters produced: motif spacing is signal
+    # for sigma70 promoters, and mean/max pooling would discard it.
+    pooling: flatten
+  # no `from_scratch:` — implied, there are no pretrained convolutional weights
+  # no `hidden_size:`  — the width comes from arch.channels
+
+task:
+  kind: supervised
+  objective: regression
+  # Train-partition statistics of expression_train_floored. Standardizing is an
+  # affine reparameterization that leaves the objective and reported metrics
+  # untouched; it is required because the raw target is heavy tailed.
+  target_transform: standardize
+  target_mean: 2.317813
+  target_std: 6.511066
+
+splits:
+  strategy: column
+  column: split
+
+train:
+  batch_size: 128
+  epochs: 20
+  lr: 1.0e-3
+  weight_decay: 0.01
+  amp: false
+  early_stop:
+    monitor: val_mae
+    mode: min
+    patience: 4

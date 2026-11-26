@@ -77,16 +77,36 @@ See [data.md](data.md) for the corpus sources in depth.
 | `backbone` | str | `zhihan1996/DNABERT-2-117M` | Hub id **or** local path to a saved backbone (e.g. from an MLM run). Used when `from_scratch: false`. |
 | `hidden_size` | int | `768` | Hidden width; for graphs must be divisible by `arch.num_attention_heads`. |
 | `dropout` | float | `0.1` | Head dropout. |
-| `from_scratch` | bool | `false` | Build an untrained encoder from `arch` + the tokenizer/encoder vocab instead of loading pretrained weights. |
-| `arch` | object | defaults | Architecture for `from_scratch` (and the graph model). |
+| `from_scratch` | bool | `false` | Build an untrained encoder from `arch` instead of loading pretrained weights. **Transformer only** — the other families have no pretrained weights, so they are always built from `arch` and omit this. |
+| `arch` | object | defaults | Architecture, discriminated by `arch.family`. |
+
+Which fields apply depends on the family:
+
+| Field | `transformer` | `conv` | `graph` |
+|-------|---------------|--------|---------|
+| `dropout` | yes | yes | yes |
+| `from_scratch` | yes | implied, omit | implied, omit |
+| `backbone` | yes | n/a | n/a |
+| `hidden_size` | yes | n/a — width comes from `arch.channels` | yes |
+
+Setting an inapplicable field explicitly is a `ConfigError` rather than silently
+ignored, so a resolved config never records a value the run did not use.
 
 ### `model.arch`
 
-Used when `model.from_scratch: true`. `model_type` selects any HuggingFace
-architecture — `bert`/`modernbert` for MLM, `gpt2`/`gpt_neox`/`llama` for causal.
+A tagged union on `family`. Configs written before the union omit the tag and
+default to `transformer`, except under `encoder.kind: graph`, which defaults to
+`graph` — so existing configs keep working untouched.
+
+#### `family: transformer`
+
+`model_type` selects any HuggingFace architecture — `bert`/`modernbert` for MLM,
+`gpt2`/`gpt_neox`/`llama` for causal. The only family supporting `task.kind`
+`mlm`, `causal` and `frozen`, and the only one `packing` applies to.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
+| `family` | `transformer` | `transformer` | |
 | `model_type` | str | `bert` | HuggingFace architecture id. RoPE types (`modernbert`, `gpt_neox`, `llama`) extrapolate past `max_position_embeddings`; absolute-position types (`bert`, `gpt2`) are capped at it. |
 | `num_hidden_layers` | int | `6` | |
 | `num_attention_heads` | int | `6` | |
@@ -94,6 +114,37 @@ architecture — `bert`/`modernbert` for MLM, `gpt2`/`gpt_neox`/`llama` for caus
 | `max_position_embeddings` | int | `2048` | Context length. |
 | `attn_implementation` | `sdpa` \| `eager` \| `flash_attention_2` | `sdpa` | SDPA uses PyTorch's fused attention (FlashAttention kernels on CUDA) and works on CPU; `flash_attention_2` needs the flash-attn package + CUDA. |
 | `rope_theta` | float | `null` | Rotary base for RoPE architectures; `null` uses the architecture default. |
+| `pooling` | `mean` \| `cls` \| `max` | `mean` | How per-position states become one vector for the head. |
+
+#### `family: conv`
+
+A 1D convolutional motif scanner: convolution plus pooling is position-invariant
+by construction, the right bias for regulatory DNA, where elements are short
+motifs at variable offsets. Supports `task.kind: supervised` only.
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `family` | `conv` | — | Required. |
+| `channels` | list[int] | `[19, 39, 54]` | Filters per layer. |
+| `kernel_sizes` | list[int] | `[16, 17, 18]` | Filter width per layer; same length as `channels`. |
+| `pool_width` | int | `16` | Width and stride of the max-pool after the stack. |
+| `embed_dim` | int | `4` | Learned token embedding width. At 4 it can represent one-hot ACGT exactly. |
+| `activation` | `relu` \| `gelu` | `relu` | |
+| `pooling` | `flatten` \| `max` \| `mean` | `flatten` | `flatten` keeps the positional layout the filters produced — motif spacing is signal — and sizes the head from the sequence length, so **`tokenizer.max_length` becomes architecturally load-bearing** and every batch is padded to it. `max`/`mean` are length-agnostic. |
+
+#### `family: graph`
+
+A PyG attention network over SBOL composition graphs. Selected automatically
+when `encoder.kind: graph`; takes its width from `model.hidden_size`.
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `family` | `graph` | — | Defaulted from `encoder.kind`. |
+| `num_hidden_layers` | int | `6` | |
+| `num_attention_heads` | int | `6` | `hidden_size` must be divisible by this. |
+
+`train.gradient_checkpointing` is a no-op for families without the HuggingFace
+hook (`conv`, `graph`).
 
 ## `task`
 

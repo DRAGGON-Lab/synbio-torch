@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 from torch.utils.data import DataLoader
 
-from synbiotorch.config import ArchConfig, ModelConfig, TaskConfig, TrainConfig
+from synbiotorch.config import ArchConfig, ConvArch, GraphArch, ModelConfig, TaskConfig, TrainConfig
 from synbiotorch.datasets.dataset import Collator, EncodedDataset
 from synbiotorch.datasets.mlm_collator import MlmCollator
 from synbiotorch.encoders.sequence import SequenceEncoder
@@ -21,6 +21,7 @@ from synbiotorch.reproducibility import set_seed
 from synbiotorch.sources.synthetic import generate_components
 from synbiotorch.tasks.mlm import MlmTask
 from synbiotorch.tasks.supervised import SupervisedTask
+from synbiotorch.tokenize.char import CharTokenizer
 from synbiotorch.tokenize.kmer import KmerTokenizer
 from synbiotorch.types import Alphabet, Design, Sequence
 
@@ -91,6 +92,31 @@ def test_supervised_sequence_learns():
     assert h.rows[-1]["val_r2"] > 0.5
 
 
+def test_conv_sequence_learns():
+    """The conv family trains end to end on the same signal as the transformer."""
+    set_seed(0)
+    length = 64
+    tok = CharTokenizer(alphabet="dna", max_length=length)
+    enc = SequenceEncoder(tok)
+    objs = _gc_objects(120)
+    arch = ConvArch(family="conv", channels=(8, 12), kernel_sizes=(6, 6), pool_width=4, embed_dim=4, pooling="flatten")
+    model = build_model(
+        ModelConfig(dropout=0.0, arch=arch),
+        TaskConfig(kind="supervised", objective="regression"),
+        vocab_size=tok.vocab_size,
+        pad_token_id=tok.pad_token_id,
+        max_length=length,
+    )
+    # `flatten` sizes the head from the sequence length, so every batch is
+    # padded to it rather than to its own longest member.
+    collator = Collator(tok.pad_token_id, pad_to=length)
+    train = DataLoader(EncodedDataset(objs[:100], enc), batch_size=16, shuffle=True, collate_fn=collator)
+    val = DataLoader(EncodedDataset(objs[100:], enc), batch_size=16, collate_fn=collator)
+    h = _run(model, SupervisedTask("regression"), train, val, collator, epochs=15, lr=5e-3)
+    assert h.rows[-1]["val_loss"] < h.rows[0]["val_loss"] * 0.7
+    assert h.rows[-1]["val_r2"] > 0.5
+
+
 def test_mlm_loss_decreases():
     set_seed(0)
     tok = KmerTokenizer(k=3, max_length=128)
@@ -145,7 +171,7 @@ def test_graph_learns():
     enc = GraphEncoder()
     objs = generate_components(200, seed=0)  # label = promoter strength
     model = build_graph_model(
-        ModelConfig(hidden_size=32, arch=ArchConfig(num_hidden_layers=2, num_attention_heads=4)),
+        ModelConfig(hidden_size=32, arch=GraphArch(family="graph", num_hidden_layers=2, num_attention_heads=4)),
         TaskConfig(kind="supervised", objective="regression"),
         enc.spec,
     )

@@ -1,0 +1,59 @@
+# Urtecho 2020 E. coli promoter MPRA -> active/inactive classification, using
+# the authors' own architecture. The same conv family as urtecho_reg_cnn, but
+# their hyperparameter search landed on a markedly different shape for
+# classification: wider early filters, far more of them, and heavier dropout
+# (Methods, "Classification").
+# Prepare the corpus first: python examples/prepare_urtecho_promoters.py
+# Compares against Urtecho 2020 Figure 7A: test AUPRC 0.44 (this architecture).
+seed: 42
+output_dir: runs/urtecho_clf_cnn
+
+corpus:
+  source: table
+  path: data/urtecho_promoters/urtecho_promoters.csv
+  sequence_column: sequence
+  label_column: active
+  id_column: id
+  alphabet: dna
+  cache_dir: .synbiotorch_cache
+
+tokenizer:
+  kind: char
+  alphabet: dna
+  max_length: 152
+
+encoder:
+  kind: sequence
+
+model:
+  dropout: 0.45541334972592196    # Urtecho Methods, "Dropout"
+  arch:
+    family: conv
+    channels: [99, 87, 60]        # "Number of filters (for each layer)"
+    kernel_sizes: [8, 29, 29]     # "Convolutional filter width (for each layer)"
+    pool_width: 7                 # "Pooling width"
+    embed_dim: 4
+    activation: relu
+    pooling: flatten
+
+task:
+  kind: supervised
+  objective: classification
+  num_classes: 2
+
+splits:
+  strategy: column
+  column: split
+
+train:
+  batch_size: 128
+  epochs: 20
+  lr: 1.0e-3
+  weight_decay: 0.01
+  amp: false
+  # Only 20.7% of records are active, so plain accuracy is a misleading monitor;
+  # validation loss tracks the ranking the AUPRC metric is read from.
+  early_stop:
+    monitor: val_loss
+    mode: min
+    patience: 4

@@ -20,7 +20,7 @@ in-process by native [sbol-rs](https://github.com/marpaia/sbol-rs) bindings.
 | **Tokenizers** | pretrained HuggingFace (`hf`), overlapping k-mer, or character-level over a nucleotide **or protein** alphabet (encode + decode) |
 | **Modalities** | `sequence`, `structure_aware` (feature boundaries), `graph` (PyG composition transformer) |
 | **Objectives** | `supervised` / `frozen` heads, `mlm` and `causal` pretraining (from-scratch or continued) |
-| **Architectures** | from-scratch or pretrained; absolute or **RoPE** positions (`gpt_neox`/`llama`/`modernbert`), SDPA/FlashAttention, configurable context length |
+| **Architectures** | **transformer** (from-scratch or pretrained; absolute or **RoPE** positions — `gpt_neox`/`llama`/`modernbert` — SDPA/FlashAttention, configurable context length), **conv** (1D motif scanner), or **graph** (PyG); configurable pooling |
 | **Generation** | autoregressive sampling (temperature / top-k / top-p) and design completion from a causal backbone (`synbiotorch generate`) |
 | **Engine** | raw-PyTorch loop, epoch- or **step-budgeted**; AMP (`fp16`/`bf16`), gradient accumulation/clipping, gradient checkpointing, `torch.compile`; **resumable** checkpoints; early stopping; LR schedule |
 | **Scaling** | token **packing**, multi-GPU **DDP** (data-parallel) via `torchrun` |

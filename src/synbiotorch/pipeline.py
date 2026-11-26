@@ -35,7 +35,7 @@ from synbiotorch.engine.callbacks import (
 )
 from synbiotorch.engine.trainer import Trainer
 from synbiotorch.exceptions import ConfigError
-from synbiotorch.models import build_model
+from synbiotorch.models import build_model, requires_fixed_length
 from synbiotorch.models.causal import CausalLMModel
 from synbiotorch.models.mlm import MaskedLMModel
 from synbiotorch.reproducibility import set_seed
@@ -102,14 +102,21 @@ def _loader(
     )
 
 
-def _collator_for(config: RunConfig, tokenizer: Any, task: Task) -> Callable[[list[Any]], Any]:
+def build_collator(
+    config: RunConfig, tokenizer: Any, task: Task, *, max_length: int | None = None
+) -> Callable[[list[Any]], Any]:
     """Pick the collator for the objective: MLM masking, causal next-token shift,
-    or supervised padding+labels."""
+    or supervised padding+labels.
+
+    Architectures whose head is sized from the sequence length get fixed-length
+    padding, so a record encodes identically regardless of its batch.
+    """
     if config.task.kind == "mlm":
         return MlmCollator(tokenizer, mlm_probability=config.task.mlm_probability)
     if config.task.kind == "causal":
         return CausalCollator(tokenizer.pad_token_id)
-    return Collator(tokenizer.pad_token_id, with_labels=True, label_dtype=task.label_dtype)
+    pad_to = max_length if requires_fixed_length(config.model) else None
+    return Collator(tokenizer.pad_token_id, with_labels=True, label_dtype=task.label_dtype, pad_to=pad_to)
 
 
 def _build_sequence_run(config: RunConfig, data: PreparedData, task: Task, ctx: DistContext) -> tuple:
@@ -117,8 +124,14 @@ def _build_sequence_run(config: RunConfig, data: PreparedData, task: Task, ctx: 
     tokenizer = build_tokenizer(config.tokenizer)
     encoder = build_encoder(config.encoder, tokenizer)
     spec = encoder.output_spec
-    model = build_model(config.model, config.task, vocab_size=spec.vocab_size, pad_token_id=spec.pad_token_id)
-    collator = _collator_for(config, tokenizer, task)
+    model = build_model(
+        config.model,
+        config.task,
+        vocab_size=spec.vocab_size,
+        pad_token_id=spec.pad_token_id,
+        max_length=spec.max_length,
+    )
+    collator = build_collator(config, tokenizer, task, max_length=spec.max_length)
     train_loader = _loader(data.objects, data.split.train, encoder, collator, config, ctx, shuffle=True)
     val_loader = _loader(data.objects, data.split.val, encoder, collator, config, ctx, shuffle=False)
     return model, train_loader, val_loader, None
@@ -134,11 +147,13 @@ def _build_streaming_run(config: RunConfig, materialized: MaterializedCorpus, ta
     tokenizer = build_tokenizer(config.tokenizer)
     ratios = config.splits.ratios
     seed = config.seed
-    collator = _collator_for(config, tokenizer, task)
 
     if config.packing.enabled:
         if config.task.kind not in ("mlm", "causal"):
             raise ConfigError("packing is supported only for task.kind: mlm or causal")
+        # Packing yields fixed-size blocks and serves mlm/causal only, so there
+        # is no sequence-length-sized head to pad for.
+        collator = build_collator(config, tokenizer, task)
         model = build_model(
             config.model, config.task, vocab_size=tokenizer.vocab_size, pad_token_id=tokenizer.pad_token_id
         )
@@ -150,7 +165,14 @@ def _build_streaming_run(config: RunConfig, materialized: MaterializedCorpus, ta
     else:
         encoder = build_encoder(config.encoder, tokenizer)
         spec = encoder.output_spec
-        model = build_model(config.model, config.task, vocab_size=spec.vocab_size, pad_token_id=spec.pad_token_id)
+        collator = build_collator(config, tokenizer, task, max_length=spec.max_length)
+        model = build_model(
+            config.model,
+            config.task,
+            vocab_size=spec.vocab_size,
+            pad_token_id=spec.pad_token_id,
+            max_length=spec.max_length,
+        )
         # A shuffle window over the train stream; val stays in shard order.
         shuffle_buffer = max(64, config.train.batch_size * 64)
         train_ds = StreamingEncodedDataset(

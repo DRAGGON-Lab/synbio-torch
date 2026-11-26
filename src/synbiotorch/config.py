@@ -8,10 +8,10 @@ serialized into the run output directory for reproducibility.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from synbiotorch.exceptions import ConfigError
 
@@ -86,15 +86,23 @@ class EncoderConfig(BaseModel):
 
 
 class ArchConfig(BaseModel):
-    """Architecture for a from-scratch model (used when ``model.from_scratch``).
+    """The ``transformer`` architecture family — a HuggingFace encoder or decoder.
 
     ``model_type`` selects any HuggingFace architecture: ``bert``/``modernbert``
     for MLM, ``gpt2``/``gpt_neox``/``llama`` for causal. RoPE-based types
     (``modernbert``, ``gpt_neox``, ``llama``) extrapolate past
     ``max_position_embeddings`` instead of failing, which is what makes long
     context practical; ``rope_theta`` tunes their rotary base.
+
+    ``family`` tags this member of the ``model.arch`` union. Configs written
+    before the union existed omit it and are defaulted to ``transformer``.
     """
 
+    # extra="forbid" so a mis-tagged arch block fails loudly instead of silently
+    # dropping the fields that belong to another family.
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["transformer"] = "transformer"
     model_type: str = "bert"
     num_hidden_layers: int = 6
     num_attention_heads: int = 6
@@ -105,6 +113,80 @@ class ArchConfig(BaseModel):
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "sdpa"
     # Rotary base for RoPE architectures; None uses the architecture's default.
     rope_theta: float | None = None
+    # How per-position hidden states are reduced to one vector for the head.
+    # ``flatten`` is deliberately absent: on a transformer it would force
+    # fixed-length padding on every run and produce a hidden_size x length head.
+    pooling: Literal["mean", "cls", "max"] = "mean"
+
+
+class ConvArch(BaseModel):
+    """The ``conv`` architecture family — a 1D convolutional motif scanner.
+
+    Convolution plus max-pooling is a position-invariant motif detector, which
+    is the right inductive bias for regulatory DNA: promoter elements are short
+    motifs at variable offsets. ``channels`` and ``kernel_sizes`` are
+    per-layer and must be the same length.
+
+    There are no pretrained convolutional checkpoints to load, so
+    ``model.from_scratch`` does not apply and may be omitted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["conv"]
+    channels: tuple[int, ...] = (19, 39, 54)
+    kernel_sizes: tuple[int, ...] = (16, 17, 18)
+    # Width and stride of the max-pool applied after the convolution stack.
+    pool_width: int = 16
+    # Width of the learned token embedding feeding the first convolution. The
+    # default of 4 mirrors one-hot ACGT, which it can represent exactly.
+    embed_dim: int = 4
+    activation: Literal["relu", "gelu"] = "relu"
+    # ``flatten`` keeps positional information, which motif spacing depends on,
+    # and requires fixed-length padding. ``max``/``mean`` are length-agnostic.
+    pooling: Literal["flatten", "max", "mean"] = "flatten"
+
+    @model_validator(mode="after")
+    def _check_stack(self) -> "ConvArch":
+        if not self.channels or len(self.channels) != len(self.kernel_sizes):
+            raise ConfigError(
+                f"arch.channels and arch.kernel_sizes must be non-empty and the same length; "
+                f"got {len(self.channels)} and {len(self.kernel_sizes)}"
+            )
+        if min(self.channels) < 1 or min(self.kernel_sizes) < 1 or self.pool_width < 1 or self.embed_dim < 1:
+            raise ConfigError("arch.channels, kernel_sizes, pool_width and embed_dim must all be positive")
+        return self
+
+
+class GraphArch(BaseModel):
+    """The ``graph`` architecture family — a PyG attention network over composition graphs.
+
+    Reuses ``num_hidden_layers``/``num_attention_heads``, and takes its width
+    from ``model.hidden_size``. Selected automatically when ``encoder.kind`` is
+    ``graph``, since that modality has no other architecture.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["graph"]
+    num_hidden_layers: int = 6
+    num_attention_heads: int = 6
+
+
+# Discriminated on ``family``. Configs predating the union omit the tag and are
+# defaulted by the validators on ModelConfig (transformer) and RunConfig (graph,
+# when the encoder says so).
+ArchUnion = Annotated[ArchConfig | ConvArch | GraphArch, Field(discriminator="family")]
+
+
+def _tag_arch(data: Any, family: str) -> Any:
+    """Return ``data`` with ``model.arch.family`` defaulted, without mutating the input."""
+    if not isinstance(data, dict):
+        return data
+    arch = data.get("arch")
+    if not isinstance(arch, dict) or "family" in arch:
+        return data
+    return {**data, "arch": {"family": family, **arch}}
 
 
 class ModelConfig(BaseModel):
@@ -115,21 +197,74 @@ class ModelConfig(BaseModel):
     dropout: float = 0.1
     # When true, build the encoder from ``arch`` + the tokenizer vocab instead of
     # downloading pretrained weights — the from-scratch MLM pretraining path.
+    # Transformer-only: the other families have no pretrained weights to load,
+    # so they are always built from ``arch`` and may omit this.
     from_scratch: bool = False
-    arch: ArchConfig = Field(default_factory=ArchConfig)
+    arch: ArchUnion = Field(default_factory=ArchConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_arch_family(cls, data: Any) -> Any:
+        """Tag an untagged ``arch`` as ``transformer``, the pre-union behavior."""
+        return _tag_arch(data, "transformer")
+
+    def _differs_from_default(self, name: str) -> bool:
+        """Whether ``name`` was set to something other than its default.
+
+        A field merely *present* is not enough: ``config.resolved.yaml`` is
+        dumped with every field, so a round-trip would otherwise trip the
+        checks below on values the run never used.
+        """
+        return name in self.model_fields_set and getattr(self, name) != type(self).model_fields[name].default
+
+    @model_validator(mode="after")
+    def _check_family_fields(self) -> "ModelConfig":
+        """Normalize, then reject, fields that cannot apply to the chosen family.
+
+        ``from_scratch`` is normalized rather than merely validated so the
+        resolved config records what was actually built and reloads cleanly.
+        """
+        if self.arch.family == "transformer":
+            return self
+        family = self.arch.family
+        if "from_scratch" in self.model_fields_set and not self.from_scratch:
+            raise ConfigError(
+                f"model.from_scratch: false is not valid for the '{family}' architecture family; "
+                "there are no pretrained weights to load, so it is always built from model.arch"
+            )
+        self.from_scratch = True
+        if self._differs_from_default("backbone"):
+            raise ConfigError(f"model.backbone applies only to the transformer family, not '{family}'")
+        if family == "conv" and self._differs_from_default("hidden_size"):
+            raise ConfigError("model.hidden_size does not apply to the conv family; width comes from arch.channels")
+        return self
 
 
 class TaskConfig(BaseModel):
     kind: Literal["supervised", "mlm", "frozen", "causal"] = "frozen"
     objective: Literal["regression", "classification"] = "regression"
     num_classes: int | None = None
-    target_transform: Literal["none", "log1p"] = "none"
+    target_transform: Literal["none", "log1p", "standardize"] = "none"
+    # Train-partition statistics for ``target_transform: standardize``. They are
+    # stated in the config rather than derived at runtime so the transform is
+    # part of the run's declared specification and cannot drift with the split.
+    target_mean: float | None = None
+    target_std: float | None = None
     mlm_probability: float = 0.15
 
     @model_validator(mode="after")
     def _check_classes(self) -> "TaskConfig":
         if self.objective == "classification" and not self.num_classes:
             raise ConfigError("task.num_classes is required for classification")
+        return self
+
+    @model_validator(mode="after")
+    def _check_target_transform(self) -> "TaskConfig":
+        if self.target_transform == "standardize":
+            if self.target_mean is None or self.target_std is None:
+                raise ConfigError("task.target_mean and task.target_std are required for target_transform: standardize")
+            if self.target_std <= 0:
+                raise ConfigError("task.target_std must be positive")
         return self
 
 
@@ -247,6 +382,55 @@ class RunConfig(BaseModel):
     splits: SplitConfig = Field(default_factory=SplitConfig)
     train: TrainConfig = Field(default_factory=TrainConfig)
     wandb: WandbConfig = Field(default_factory=WandbConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_graph_arch_family(cls, data: Any) -> Any:
+        """Tag an untagged ``arch`` as ``graph`` when the encoder is the graph modality.
+
+        Runs before ``ModelConfig`` validation, which would otherwise default it
+        to ``transformer``. Graph configs predating the union carry an ``arch``
+        with only ``num_hidden_layers``/``num_attention_heads``, and tagging them
+        transformer would both misdescribe them in the resolved config and trip
+        the encoder/family check below.
+        """
+        if not isinstance(data, dict):
+            return data
+        encoder = data.get("encoder")
+        kind = encoder.get("kind") if isinstance(encoder, dict) else getattr(encoder, "kind", None)
+        if kind != "graph":
+            return data
+        model = data.get("model")
+        if model is None:
+            # No model block at all: the graph modality has only one architecture.
+            return {**data, "model": {"arch": {"family": "graph"}}}
+        if not isinstance(model, dict):
+            # An already-constructed ModelConfig states its family; honor it and
+            # let the consistency check below report any disagreement.
+            return data
+        if "arch" not in model:
+            return {**data, "model": {**model, "arch": {"family": "graph"}}}
+        tagged = _tag_arch(model, "graph")
+        return data if tagged is model else {**data, "model": tagged}
+
+    @model_validator(mode="after")
+    def _check_model_task(self) -> "RunConfig":
+        """Reject architecture/modality/objective combinations that cannot be built."""
+        family = self.model.arch.family
+        if (self.encoder.kind == "graph") != (family == "graph"):
+            raise ConfigError(
+                f"encoder.kind '{self.encoder.kind}' and model.arch.family '{family}' disagree; "
+                "the graph modality requires the graph family and vice versa"
+            )
+        if family == "conv":
+            if self.task.kind != "supervised":
+                raise ConfigError(
+                    f"task.kind '{self.task.kind}' requires a transformer architecture; "
+                    "the conv family supports 'supervised' only"
+                )
+            if self.packing.enabled:
+                raise ConfigError("packing.enabled requires a transformer architecture")
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
