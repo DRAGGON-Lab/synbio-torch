@@ -1,0 +1,59 @@
+# Urtecho 2020 E. coli promoter MPRA -> quantitative promoter activity
+# regression in log space, fine-tuning a pretrained DNABERT-2 backbone. The
+# target sibling of urtecho_reg_dnabert2: only `task.target_transform` differs.
+# Prepare the corpus first:  python examples/prepare_urtecho_promoters.py
+# Prepare a Triton-free DNABERT-2 first (Apple Silicon / CPU):
+#   uv run --with huggingface_hub python examples/prepare_dnabert2.py
+#
+# The raw target spans -0.5 to 227 with three quarters of the fitting rows at
+# the floor, so a squared-error loss on the linear scale is dominated by a thin
+# tail of strong promoters. This cell fits log1p(expression) instead, via the
+# task's built-in target transform. It is a diagnostic rather than a presumed
+# win: raw-scale R^2 rewards exactly the tail that a log target de-emphasizes.
+# eval_urtecho.py inverts the transform and scores the predictions against the
+# same raw `expression` column as every other cell, and also reports the
+# log-space R^2.
+seed: 42
+output_dir: runs/urtecho_reg_dnabert2_log
+
+corpus:
+  source: table
+  path: data/urtecho_promoters/urtecho_promoters.csv
+  sequence_column: sequence
+  label_column: expression_train_floored
+  id_column: id
+  alphabet: dna
+  cache_dir: .synbiotorch_cache
+
+tokenizer:
+  kind: hf
+  model_name: data/dnabert2
+  max_length: 64
+
+encoder:
+  kind: sequence
+
+model:
+  from_scratch: false
+  backbone: data/dnabert2
+  dropout: 0.1
+
+task:
+  kind: supervised
+  objective: regression
+  target_transform: log1p
+
+splits:
+  strategy: column
+  column: split
+
+train:
+  batch_size: 32
+  epochs: 4
+  lr: 2.0e-5
+  weight_decay: 0.01
+  amp: false
+  early_stop:
+    monitor: val_mae
+    mode: min
+    patience: 2

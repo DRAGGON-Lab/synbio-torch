@@ -42,7 +42,7 @@ def test_graph_model_forward():
     enc = GraphEncoder()
     batch = next(iter(DataLoader([enc.encode(c) for c in generate_components(4, seed=3)], batch_size=4)))
     model = build_graph_model(
-        ModelConfig(hidden_size=32, arch={"num_hidden_layers": 2, "num_attention_heads": 4}),
+        ModelConfig(hidden_size=32, arch={"family": "graph", "num_hidden_layers": 2, "num_attention_heads": 4}),
         TaskConfig(kind="supervised", objective="regression"),
         enc.spec,
     )

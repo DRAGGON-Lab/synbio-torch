@@ -6,10 +6,10 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import TransformerConv, global_mean_pool
 
-from synbiotorch.config import ModelConfig, TaskConfig
+from synbiotorch.config import GraphArch, ModelConfig, TaskConfig
 from synbiotorch.encoders.graph import GraphSpec
 from synbiotorch.exceptions import ConfigError
-from synbiotorch.models.heads import ClassificationHead, RegressionHead
+from synbiotorch.models.heads import build_head
 
 
 class GraphTransformerModel(nn.Module):
@@ -56,18 +56,16 @@ class GraphTransformerModel(nn.Module):
 
 
 def build_graph_model(model_config: ModelConfig, task_config: TaskConfig, spec: GraphSpec) -> GraphTransformerModel:
+    arch = model_config.arch
+    if not isinstance(arch, GraphArch):
+        raise ConfigError(f"the graph model requires model.arch.family 'graph', not '{arch.family}'")
     hidden = model_config.hidden_size
-    head: nn.Module
-    if task_config.objective == "classification":
-        assert task_config.num_classes is not None  # enforced by TaskConfig validation
-        head = ClassificationHead(hidden, task_config.num_classes, model_config.dropout)
-    else:
-        head = RegressionHead(hidden, model_config.dropout)
+    head = build_head(task_config, hidden, model_config.dropout)
     return GraphTransformerModel(
         spec,
         hidden_size=hidden,
-        num_layers=model_config.arch.num_hidden_layers,
-        attn_heads=model_config.arch.num_attention_heads,
+        num_layers=arch.num_hidden_layers,
+        attn_heads=arch.num_attention_heads,
         head=head,
         dropout=model_config.dropout,
     )

@@ -12,13 +12,26 @@ from typing import Any
 import torch.nn as nn
 from transformers import AutoConfig, AutoModel, PretrainedConfig
 
-from synbiotorch.config import ModelConfig
+from synbiotorch.config import ArchConfig, ModelConfig
 from synbiotorch.exceptions import ConfigError
+
+
+def transformer_arch(model_config: ModelConfig, *, what: str = "this model") -> ArchConfig:
+    """Narrow ``model.arch`` to the transformer family, or fail with a clear message.
+
+    The single narrowing point for every code path that reads HuggingFace
+    architecture fields, so the union stays confined to one place and the
+    MLM/causal builders get their rejection of non-transformer families free.
+    """
+    arch = model_config.arch
+    if not isinstance(arch, ArchConfig):
+        raise ConfigError(f"{what} requires a transformer architecture; model.arch.family is '{arch.family}'")
+    return arch
 
 
 def from_scratch_config(model_config: ModelConfig, *, vocab_size: int, pad_token_id: int) -> PretrainedConfig:
     """Build the HuggingFace config for a from-scratch model from ``ArchConfig``."""
-    arch = model_config.arch
+    arch = transformer_arch(model_config)
     extra: dict[str, Any] = {}
     if arch.rope_theta is not None:
         extra["rope_theta"] = arch.rope_theta
@@ -37,7 +50,7 @@ def from_scratch_config(model_config: ModelConfig, *, vocab_size: int, pad_token
 
 def attn_kwargs(model_config: ModelConfig) -> dict[str, str]:
     """Keyword args selecting the attention implementation for model construction."""
-    return {"attn_implementation": model_config.arch.attn_implementation}
+    return {"attn_implementation": transformer_arch(model_config).attn_implementation}
 
 
 def load_backbone(model_name: str, model_config: ModelConfig | None = None) -> tuple[nn.Module, int]:

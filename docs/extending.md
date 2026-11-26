@@ -60,6 +60,47 @@ needs a different head/model, extend `build_model` (as `mlm` and `causal` do, ea
 wrapping a different HuggingFace `AutoModelFor…`). A new objective may also need a
 matching collator — `supervised` pads, `mlm` masks, `causal` shifts targets.
 
+## Add a model architecture
+
+Architectures are a family under `model.arch`, discriminated by `family`.
+Subclass `SequenceBackbone` (`synbiotorch.models.conv`):
+
+```python
+class MyBackbone(SequenceBackbone):
+    def forward(self, input_ids, attention_mask) -> tuple[Tensor, Tensor]:
+        ...  # features [B, L', C] channels-last, plus the mask for L'
+    @property
+    def out_channels(self) -> int: ...
+    def out_length(self, in_length: int) -> int: ...   # pure arithmetic
+```
+
+Returning the mask alongside the features is what makes the contract general:
+an architecture that changes sequence length (a convolution or pooling stack)
+must hand downstream pooling the mask for its *own* output, not the input's.
+`out_length` is arithmetic over the config so a head can be sized before any
+tensor exists.
+
+It is a base class rather than a `Protocol` deliberately — a HuggingFace module
+also has a `forward(input_ids, attention_mask)`, so a structural check could not
+tell the two apart, and `SequenceModel` needs that distinction to know how to
+read the output.
+
+Add a config member with a `family` literal and `extra="forbid"`, include it in
+`ArchUnion` (`synbiotorch.config`), and register the builder in
+`build_architecture` (`synbiotorch.models`). Pick a `pooling` default in the
+arch member: poolers are parameter-free and interchangeable
+(`synbiotorch.models.pooling`), and `output_dim` is what sizes the head. A
+pooler whose width depends on sequence length (like `flatten`) must also be
+reported by `requires_fixed_length`, so batches are padded to a constant length
+rather than to their own longest member.
+
+Nothing in the pipeline, trainer, tasks, or heads changes.
+
+Architecture is independent of **modality**: `encoder.kind` decides the batch
+shape, `model.arch.family` decides what consumes it. The `graph` family is a
+family in the same union, but it takes a PyG `Data` rather than token ids, so it
+is built by `build_graph_model` and paired with `GraphBatchAdapter`.
+
 ## Add a callback
 
 Subclass `Callback` (`synbiotorch.engine.callbacks`) and override

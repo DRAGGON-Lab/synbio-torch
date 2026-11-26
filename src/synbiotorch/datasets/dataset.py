@@ -30,9 +30,20 @@ class EncodedDataset(Dataset):
         return self._encoder.encode(self._objects[index])
 
 
-def pad_token_batch(batch: list[ModelInput], pad_token_id: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Right-pad input_ids/attention_mask to the batch's longest sequence."""
-    max_len = max(len(item.input_ids) for item in batch)
+def pad_token_batch(
+    batch: list[ModelInput], pad_token_id: int, *, pad_to: int | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Right-pad input_ids/attention_mask to the batch's longest sequence.
+
+    ``pad_to`` pads to a constant length instead. Models whose head is sized
+    from the sequence length need this: padding to the batch's own longest
+    member would make a record's features depend on which records it was
+    batched with.
+    """
+    longest = max(len(item.input_ids) for item in batch)
+    if pad_to is not None and longest > pad_to:
+        raise ValueError(f"a sequence of {longest} tokens exceeds the fixed padding length {pad_to}")
+    max_len = pad_to if pad_to is not None else longest
     input_ids = torch.full((len(batch), max_len), pad_token_id, dtype=torch.long)
     attention = torch.zeros((len(batch), max_len), dtype=torch.long)
     for i, item in enumerate(batch):
@@ -45,13 +56,21 @@ def pad_token_batch(batch: list[ModelInput], pad_token_id: int) -> tuple[torch.T
 class Collator:
     """Pads a batch of ModelInputs and attaches supervised labels."""
 
-    def __init__(self, pad_token_id: int, *, with_labels: bool = True, label_dtype: str = "float") -> None:
+    def __init__(
+        self,
+        pad_token_id: int,
+        *,
+        with_labels: bool = True,
+        label_dtype: str = "float",
+        pad_to: int | None = None,
+    ) -> None:
         self.pad_token_id = pad_token_id
         self.with_labels = with_labels
         self.label_dtype = label_dtype
+        self.pad_to = pad_to
 
     def __call__(self, batch: list[ModelInput]) -> dict[str, torch.Tensor]:
-        input_ids, attention = pad_token_batch(batch, self.pad_token_id)
+        input_ids, attention = pad_token_batch(batch, self.pad_token_id, pad_to=self.pad_to)
         out: dict[str, Any] = {"input_ids": input_ids, "attention_mask": attention}
         if self.with_labels:
             labels = [item.label for item in batch]

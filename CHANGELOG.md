@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Model architecture is now a plug point.** `model.arch` is a tagged union on
+  `family`, joining tokenizers, encoders, tasks, callbacks, batch modalities and
+  data sources as a protocol-plus-factory axis. Adding a family is one config
+  member, one `SequenceBackbone` subclass, and one branch in
+  `build_architecture`.
+- **`family: conv`** — a 1D convolutional motif scanner. Convolution plus
+  pooling is position-invariant by construction, which suits regulatory DNA and
+  needs far fewer parameters than attention.
+- **Configurable pooling** (`arch.pooling`): masked `mean` (the previous fixed
+  behavior), `max`, `cls`, and `flatten`, which preserves positional layout and
+  sizes the head from the sequence length. Poolers hold no parameters, so
+  existing checkpoints are unaffected.
+- **`task.target_transform: standardize`** with `target_mean`/`target_std`, for
+  heavy-tailed targets whose raw scale makes the squared-error gradient
+  ill-conditioned.
+- `Collator(pad_to=...)` for architectures whose head width depends on sequence
+  length, so a record's features never depend on its batch-mates.
+
+### Changed
+
+- `build_model` takes `max_length` and sizes the head from the pooler's output
+  width rather than from `model.hidden_size`.
+- Fields that cannot apply to the chosen family (`from_scratch`, `backbone`,
+  `hidden_size`) now raise `ConfigError` when set explicitly, instead of being
+  silently ignored. `from_scratch` is implied for non-transformer families.
+- `encoder.kind: graph` defaults `arch.family` to `graph`, so the graph model is
+  described honestly in resolved configs instead of being tagged a transformer.
+
+Existing configs and checkpoints are unaffected: an untagged `arch` resolves to
+its previous meaning, and `state_dict` keys are unchanged.
+
 ## [0.2.0] - 2026-06-20
 
 A rebrand to a general synthetic-biology ML library. **Breaking** throughout (the

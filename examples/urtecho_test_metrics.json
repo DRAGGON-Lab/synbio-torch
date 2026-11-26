@@ -1,0 +1,188 @@
+{
+  "published": {
+    "regression": {
+      "metric": "R^2 (squared Pearson, as the paper defines it)",
+      "value": 0.31,
+      "source": "Urtecho 2020 Fig 7B (tuned DragoNN CNN)"
+    },
+    "classification": {
+      "metric": "AUPRC",
+      "value": 0.44,
+      "source": "Urtecho 2020 Fig 7A (tuned DragoNN CNN)"
+    }
+  },
+  "runs": {
+    "regression": [
+      {
+        "configuration": "Urtecho 2020 CNN (authors' archived predictions)",
+        "run": null,
+        "n_test": 30392,
+        "test_r2": 0.3019901885198958,
+        "test_r2_ci95": [
+          0.25442640423310137,
+          0.3508096156203929
+        ],
+        "test_r2_squared_pearson": 0.31312646954155754,
+        "test_rmse": 6.530674203565655,
+        "test_mae": 1.8632103722141826,
+        "test_pearson_r": 0.5595770452239419,
+        "test_r2_log1p": 0.08585008773748182
+      },
+      {
+        "configuration": "CNN (Urtecho architecture)",
+        "run": "urtecho_reg_cnn",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "test_r2": 0.2333054675807391,
+        "test_r2_ci95": [
+          0.18738149175160235,
+          0.27584144454593595
+        ],
+        "test_r2_squared_pearson": 0.235234673560059,
+        "test_rmse": 6.844448153136942,
+        "test_mae": 2.117776605203445,
+        "test_pearson_r": 0.48500997263979945,
+        "test_r2_log1p": -0.08913497701854922,
+        "predictions": "examples/urtecho_predictions/urtecho_reg_cnn.npz"
+      },
+      {
+        "configuration": "char transformer (scratch)",
+        "run": "urtecho_reg_char",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "test_r2": 0.08845368522844965,
+        "test_r2_ci95": [
+          0.05301670048711149,
+          0.12512947229131277
+        ],
+        "test_r2_squared_pearson": 0.09266408752755007,
+        "test_rmse": 7.463054700333435,
+        "test_mae": 2.1243255663660943,
+        "test_pearson_r": 0.3044077652221606,
+        "test_r2_log1p": -0.11254074410628823,
+        "predictions": "examples/urtecho_predictions/urtecho_reg_char.npz"
+      },
+      {
+        "configuration": "k-mer transformer (scratch)",
+        "run": "urtecho_reg_kmer",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "test_r2": 0.2266738766215034,
+        "test_r2_ci95": [
+          0.18190901548136462,
+          0.2723298167258018
+        ],
+        "test_r2_squared_pearson": 0.23095316829734042,
+        "test_rmse": 6.873985244179772,
+        "test_mae": 2.0986364825548316,
+        "test_pearson_r": 0.48057587153054243,
+        "test_r2_log1p": -0.13333966204562508,
+        "predictions": "examples/urtecho_predictions/urtecho_reg_kmer.npz"
+      },
+      {
+        "configuration": "DNABERT-2 (fine-tuned)",
+        "run": "urtecho_reg_dnabert2",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "test_r2": 0.09571879270337624,
+        "test_r2_ci95": [
+          0.0806535066420635,
+          0.11013724966076488
+        ],
+        "test_r2_squared_pearson": 0.24066848899240514,
+        "test_rmse": 7.4332545899789295,
+        "test_mae": 2.0735449625201223,
+        "test_pearson_r": 0.4905797478416788,
+        "test_r2_log1p": -0.02396490605772228,
+        "predictions": "examples/urtecho_predictions/urtecho_reg_dnabert2.npz"
+      },
+      {
+        "configuration": "DNABERT-2 (log target)",
+        "run": "urtecho_reg_dnabert2_log",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "test_r2": 0.240571192251121,
+        "test_r2_ci95": [
+          0.19627014893470662,
+          0.28354656837999104
+        ],
+        "test_r2_squared_pearson": 0.25870370037917906,
+        "test_rmse": 6.81193960252558,
+        "test_mae": 1.952784603738767,
+        "test_pearson_r": 0.5086292366539492,
+        "test_r2_log1p": 0.0014035243707287703,
+        "predictions": "examples/urtecho_predictions/urtecho_reg_dnabert2_log.npz"
+      }
+    ],
+    "classification": [
+      {
+        "configuration": "Urtecho 2020 CNN (authors' archived predictions)",
+        "run": null,
+        "n_test": 30392,
+        "n_positive": 6345,
+        "test_auprc": 0.4392354813290724,
+        "test_auprc_ci95": [
+          0.42609927967214406,
+          0.45193815945340876
+        ],
+        "test_auroc": 0.7373170802922291
+      },
+      {
+        "configuration": "CNN (Urtecho architecture)",
+        "run": "urtecho_clf_cnn",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "n_positive": 6345,
+        "test_auprc": 0.4191901773972235,
+        "test_auprc_ci95": [
+          0.4075052099219789,
+          0.4309877532031988
+        ],
+        "test_auroc": 0.7259437168012485,
+        "predictions": "examples/urtecho_predictions/urtecho_clf_cnn.npz"
+      },
+      {
+        "configuration": "char transformer (scratch)",
+        "run": "urtecho_clf_char",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "n_positive": 6345,
+        "test_auprc": 0.2998281045891375,
+        "test_auprc_ci95": [
+          0.2908599921106017,
+          0.30985088200493976
+        ],
+        "test_auroc": 0.6441371495924237,
+        "predictions": "examples/urtecho_predictions/urtecho_clf_char.npz"
+      },
+      {
+        "configuration": "k-mer transformer (scratch)",
+        "run": "urtecho_clf_kmer",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "n_positive": 6345,
+        "test_auprc": 0.3240659713161019,
+        "test_auprc_ci95": [
+          0.31356557486073333,
+          0.3347047199940474
+        ],
+        "test_auroc": 0.6749814349315858,
+        "predictions": "examples/urtecho_predictions/urtecho_clf_kmer.npz"
+      },
+      {
+        "configuration": "DNABERT-2 (fine-tuned)",
+        "run": "urtecho_clf_dnabert2",
+        "checkpoint": "best.pt",
+        "n_test": 30392,
+        "n_positive": 6345,
+        "test_auprc": 0.3645230935445861,
+        "test_auprc_ci95": [
+          0.35338415534412143,
+          0.375987454674064
+        ],
+        "test_auroc": 0.6913653564501328,
+        "predictions": "examples/urtecho_predictions/urtecho_clf_dnabert2.npz"
+      }
+    ]
+  }
+}

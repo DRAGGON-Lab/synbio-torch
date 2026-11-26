@@ -1,0 +1,56 @@
+# Urtecho 2020 E. coli promoter MPRA -> active/inactive classification, from
+# scratch with a character tokenizer. One cell of the tokenizer x backbone sweep:
+# swap only the tokenizer/model block to reach the k-mer or pretrained variants.
+# Prepare the corpus first: python examples/prepare_urtecho_promoters.py
+# Compares against Urtecho 2020 Figure 7A: test AUPRC 0.44 (tuned DragoNN CNN).
+seed: 42
+output_dir: runs/urtecho_clf_char
+
+corpus:
+  source: table
+  path: data/urtecho_promoters/urtecho_promoters.csv
+  sequence_column: sequence
+  label_column: active
+  id_column: id
+  alphabet: dna
+  cache_dir: .synbiotorch_cache
+
+tokenizer:
+  kind: char
+  alphabet: dna
+  max_length: 160
+
+encoder:
+  kind: sequence
+
+model:
+  from_scratch: true
+  hidden_size: 256
+  arch:
+    model_type: bert
+    num_hidden_layers: 4
+    num_attention_heads: 4
+    intermediate_size: 512
+    max_position_embeddings: 192
+
+task:
+  kind: supervised
+  objective: classification
+  num_classes: 2
+
+splits:
+  strategy: column
+  column: split
+
+train:
+  batch_size: 128
+  epochs: 20
+  lr: 1.0e-3
+  weight_decay: 0.01
+  amp: false
+  # Only 20.7% of records are active, so plain accuracy is a misleading monitor;
+  # validation loss tracks the ranking the AUPRC metric is read from.
+  early_stop:
+    monitor: val_loss
+    mode: min
+    patience: 4
