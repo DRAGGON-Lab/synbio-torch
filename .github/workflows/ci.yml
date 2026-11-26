@@ -8,6 +8,12 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Pin the interpreter rather than taking whatever `uv python install`
+    # considers newest: torch publishes wheels for cp311-cp314 only, so an
+    # unpinned job starts failing the moment CPython cuts a release ahead of
+    # it. 3.13 is what the project's own venv runs on.
+    env:
+      UV_PYTHON: "3.13"
     steps:
       - uses: actions/checkout@v4
 
